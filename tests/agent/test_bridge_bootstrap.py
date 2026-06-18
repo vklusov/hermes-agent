@@ -73,3 +73,71 @@ def test_ensure_bridge_runtime_context_refreshes_stale_file(monkeypatch, tmp_pat
 
     assert path == tmp_path / "session-bridge.md"
     assert "Runtime Bridge Agents Context" in path.read_text(encoding="utf-8")
+
+
+def test_send_bridge_task_posts_json_and_uses_named_key(monkeypatch, tmp_path):
+    monkeypatch.setattr(bb, "BRIDGE_CONFIG_PATH", tmp_path / "bridge.yaml")
+    (tmp_path / "bridge.yaml").write_text(
+        "agents:\n"
+        "  - name: Fedor\n"
+        "    base_url: http://127.0.0.1:8001\n"
+        "    task_url: http://127.0.0.1:8001/task\n"
+        "    health_url: http://127.0.0.1:8001/health\n"
+        "    status: configured\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BRIDGE_API_KEY_FEDOR", "fedor-secret")
+    seen = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"status":"accepted","task_id":"abc123"}'
+
+    def fake_urlopen(req, timeout=0):
+        seen["url"] = req.full_url
+        seen["headers"] = dict(req.headers)
+        seen["body"] = req.data.decode("utf-8")
+        seen["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(bb.request, "urlopen", fake_urlopen)
+
+    result = bb.send_bridge_task("fedor", "проверить серверы", deliver="origin", timeout=3)
+
+    assert seen["url"] == "http://127.0.0.1:8001/task"
+    assert seen["headers"]["X-api-key"] == "fedor-secret"
+    assert seen["timeout"] == 3
+    assert '"task": "проверить серверы"' in seen["body"]
+    assert '"deliver": "origin"' in seen["body"]
+    assert result["status"] == "accepted"
+    assert result["task_id"] == "abc123"
+    assert result["agent"] == "Fedor"
+
+
+def test_send_bridge_task_requires_api_key(monkeypatch, tmp_path):
+    monkeypatch.setattr(bb, "BRIDGE_CONFIG_PATH", tmp_path / "bridge.yaml")
+    monkeypatch.setattr(bb, "_BRIDGE_ENV_PATH", tmp_path / ".env")
+    monkeypatch.delenv("BRIDGE_API_KEY_FEDOR", raising=False)
+    (tmp_path / "bridge.yaml").write_text(
+        "agents:\n"
+        "  - name: fedor\n"
+        "    base_url: http://127.0.0.1:8001\n"
+        "    task_url: http://127.0.0.1:8001/task\n"
+        "    health_url: http://127.0.0.1:8001/health\n"
+        "    status: configured\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+
+    try:
+        bb.send_bridge_task("fedor", "test")
+    except RuntimeError as exc:
+        assert "BRIDGE_API_KEY_FEDOR" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")

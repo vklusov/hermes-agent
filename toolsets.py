@@ -59,6 +59,8 @@ _HERMES_CORE_TOOLS = [
     "execute_code", "delegate_task",
     # Cronjob management
     "cronjob",
+    # Bridge task dispatch without shell approval
+    "bridge_send_task",
     # Native cheap worker for bounded routine text tasks
     "routine_worker",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
