@@ -54,6 +54,8 @@ import yaml
 from hermes_cli.fallback_config import get_fallback_chain
 from hermes_cli.cli_agent_setup_mixin import CLIAgentSetupMixin
 from hermes_cli.cli_commands_mixin import CLICommandsMixin
+from agent.native_skills import activate_auto_preloaded_native_skills
+from agent.skill_preprocessing import load_skill_auto_preload
 
 # prompt_toolkit for fixed input area TUI
 from prompt_toolkit.history import FileHistory
@@ -13631,6 +13633,17 @@ def main(
             toolsets_list = sorted(_get_platform_tools(CLI_CONFIG, "cli"))
     
     parsed_skills = _parse_skills_argument(skills)
+    auto_skills = load_skill_auto_preload()
+    native_activations = activate_auto_preloaded_native_skills(auto_skills)
+    if native_activations:
+        logger.info(
+            "native_skill_loaded source=cli skills=%s",
+            ", ".join(f"{item.name}:{item.mode}" for item in native_activations),
+        )
+    combined_skills = []
+    for skill_name in auto_skills + parsed_skills:
+        if skill_name and skill_name not in combined_skills:
+            combined_skills.append(skill_name)
 
     # Create CLI instance
     cli = HermesCLI(
@@ -13648,11 +13661,18 @@ def main(
         ignore_rules=ignore_rules,
     )
 
-    if parsed_skills:
+    if combined_skills:
         skills_prompt, loaded_skills, missing_skills = build_preloaded_skills_prompt(
-            parsed_skills,
+            combined_skills,
             task_id=cli.session_id,
         )
+        try:
+            from agent.bridge_bootstrap import load_runtime_context
+            bridge_context = load_runtime_context().strip()
+        except Exception:
+            bridge_context = ""
+        if bridge_context:
+            skills_prompt = f"{skills_prompt}\n\n{bridge_context}"
         if missing_skills:
             missing_display = ", ".join(missing_skills)
             raise ValueError(f"Unknown skill(s): {missing_display}")

@@ -5,6 +5,10 @@ import re
 import subprocess
 from pathlib import Path
 
+import yaml
+
+from hermes_cli.config import get_config_path
+
 logger = logging.getLogger(__name__)
 
 # Matches ${HERMES_SKILL_DIR} / ${HERMES_SESSION_ID} tokens in SKILL.md.
@@ -23,15 +27,36 @@ _INLINE_SHELL_MAX_OUTPUT = 4000
 def load_skills_config() -> dict:
     """Load the ``skills`` section of config.yaml (best-effort)."""
     try:
-        from hermes_cli.config import load_config
-
-        cfg = load_config() or {}
+        config_path = get_config_path()
+        if not config_path.exists():
+            return {}
+        with config_path.open("r", encoding="utf-8") as handle:
+            cfg = yaml.safe_load(handle) or {}
         skills_cfg = cfg.get("skills")
         if isinstance(skills_cfg, dict):
             return skills_cfg
     except Exception:
         logger.debug("Could not read skills config", exc_info=True)
     return {}
+
+
+def load_skill_auto_preload() -> list[str]:
+    """Return skills that should auto-preload at session start."""
+    skills_cfg = load_skills_config()
+    auto = skills_cfg.get("auto_preload")
+    if isinstance(auto, str):
+        try:
+            auto = yaml.safe_load(auto)
+        except Exception:
+            return []
+    if not isinstance(auto, list):
+        return []
+    result = []
+    for item in auto:
+        value = str(item).strip()
+        if value and value not in result:
+            result.append(value)
+    return result
 
 
 def substitute_template_vars(

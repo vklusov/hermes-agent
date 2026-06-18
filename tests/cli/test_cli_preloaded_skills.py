@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -78,6 +79,7 @@ def test_main_applies_preloaded_skills_to_system_prompt(monkeypatch):
         return created["cli"]
 
     monkeypatch.setattr(cli_mod, "HermesCLI", fake_cli)
+    monkeypatch.setattr(cli_mod, "load_skill_auto_preload", lambda: [])
     monkeypatch.setattr(
         cli_mod,
         "build_preloaded_skills_prompt",
@@ -88,14 +90,92 @@ def test_main_applies_preloaded_skills_to_system_prompt(monkeypatch):
         cli_mod.main(skills="hermes-agent-dev,github-auth", list_tools=True)
 
     cli_obj = created["cli"]
-    assert cli_obj.system_prompt == "base prompt\n\nskill prompt"
+    assert cli_obj.system_prompt.startswith("base prompt\n\nskill prompt")
     assert cli_obj.preloaded_skills == ["hermes-agent-dev", "github-auth"]
+
+
+def test_main_auto_preloads_skills_from_config(monkeypatch):
+    import cli as cli_mod
+
+    created = {}
+
+    def fake_cli(**kwargs):
+        created["cli"] = _DummyCLI(**kwargs)
+        return created["cli"]
+
+    monkeypatch.setattr(cli_mod, "HermesCLI", fake_cli)
+    monkeypatch.setattr(cli_mod, "_parse_skills_argument", lambda skills: ["user-skill"])
+    monkeypatch.setattr(cli_mod, "load_skill_auto_preload", lambda: ["bridge-agents", "user-skill"])
+    monkeypatch.setattr(
+        cli_mod,
+        "activate_auto_preloaded_native_skills",
+        lambda skills: [],
+    )
+    monkeypatch.setattr("agent.bridge_bootstrap.load_runtime_context", lambda: "# Runtime Bridge Agents Context\nbridge")
+    seen = {}
+
+    def fake_prompt(skills, task_id=None):
+        seen["skills"] = list(skills)
+        return ("skill prompt", skills, [])
+
+    monkeypatch.setattr(
+        cli_mod,
+        "build_preloaded_skills_prompt",
+        fake_prompt,
+    )
+
+    with pytest.raises(SystemExit):
+        cli_mod.main(skills="user-skill", list_tools=True)
+
+    cli_obj = created["cli"]
+    assert cli_obj.preloaded_skills == ["bridge-agents", "user-skill"]
+    assert seen["skills"] == ["bridge-agents", "user-skill"]
+
+
+def test_main_emits_native_skill_loaded_log(monkeypatch):
+    import cli as cli_mod
+
+    created = {}
+    logs = []
+
+    def fake_cli(**kwargs):
+        created["cli"] = _DummyCLI(**kwargs)
+        return created["cli"]
+
+    monkeypatch.setattr(cli_mod, "HermesCLI", fake_cli)
+    monkeypatch.setattr(cli_mod, "load_skill_auto_preload", lambda: ["bridge-agents", "user-skill"])
+    monkeypatch.setattr(cli_mod, "_parse_skills_argument", lambda skills: ["user-skill"])
+    monkeypatch.setattr(
+        cli_mod,
+        "activate_auto_preloaded_native_skills",
+        lambda skills: [
+            SimpleNamespace(
+                name="bridge-agents",
+                mode="bootstrap+prompt",
+                detail="/tmp/session-bridge.md",
+            )
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_mod,
+        "build_preloaded_skills_prompt",
+        lambda skills, task_id=None: ("skill prompt", ["bridge-agents", "user-skill"], []),
+    )
+    monkeypatch.setattr(cli_mod.logger, "info", lambda msg, *args, **kwargs: logs.append((msg, args)))
+
+    with pytest.raises(SystemExit):
+        cli_mod.main(skills="user-skill", list_tools=True)
+
+    assert any(msg == "native_skill_loaded source=cli skills=%s" for msg, _ in logs)
+    assert created["cli"].preloaded_skills == ["bridge-agents", "user-skill"]
 
 
 def test_main_raises_for_unknown_preloaded_skill(monkeypatch):
     import cli as cli_mod
 
     monkeypatch.setattr(cli_mod, "HermesCLI", lambda **kwargs: _DummyCLI(**kwargs))
+    monkeypatch.setattr(cli_mod, "load_skill_auto_preload", lambda: [])
     monkeypatch.setattr(
         cli_mod,
         "build_preloaded_skills_prompt",

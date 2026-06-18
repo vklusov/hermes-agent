@@ -54,6 +54,8 @@ from typing import Dict, Optional, Any, List, Union
 from agent.account_usage import fetch_account_usage, render_account_usage_lines
 from agent.async_utils import safe_schedule_threadsafe
 from agent.i18n import t
+from agent.native_skills import activate_auto_preloaded_native_skills
+from agent.skill_preprocessing import load_skill_auto_preload
 from hermes_cli.config import cfg_get
 from hermes_cli.fallback_config import get_fallback_chain
 
@@ -136,6 +138,7 @@ _GATEWAY_SECRET_PATTERNS = (
 )
 
 
+
 def _ensure_windows_gateway_venv_imports() -> None:
     """Make detached Windows gateway runs see the Hermes venv packages.
 
@@ -188,6 +191,18 @@ def _ensure_windows_gateway_venv_imports() -> None:
             pythonpath.append(os.environ["PYTHONPATH"])
         os.environ["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(pythonpath))
         return
+def _activate_gateway_auto_skills(skill_names: list[str]) -> list[Any]:
+    """Activate gateway auto-preloaded skills and emit the canonical log."""
+    if not skill_names:
+        return []
+    native_activations = activate_auto_preloaded_native_skills(skill_names)
+    if native_activations:
+        logger.info(
+            "native_skill_loaded source=gateway skills=%s",
+            ", ".join(f"{item.name}:{item.mode}" for item in native_activations),
+        )
+    return native_activations
+
 
 
 def _gateway_platform_value(platform: Any) -> str:
@@ -5006,6 +5021,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         except Exception:
             pass
 
+        # Activate globally auto-preloaded native skills at gateway startup,
+        # not only when the first message creates a new session. Native tools
+        # such as routine_worker must be registered before tool schemas are
+        # assembled for the first agent turn, and bridge bootstrap context must
+        # exist before any bridge task is routed.
+        try:
+            _startup_auto_skills = load_skill_auto_preload()
+            _activate_gateway_auto_skills(_startup_auto_skills)
+        except Exception as exc:
+            logger.warning("Gateway native auto-skill startup activation failed: %s", exc)
+
         # Log any active supply-chain security advisories. Operators see this
         # in gateway.log and `hermes status` surfaces it; we do NOT block
         # startup or surface it inline to user messages, since the gateway
@@ -8516,8 +8542,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Only inject on NEW sessions — ongoing conversations already have the
         # skill content in their conversation history from the first message.
         _auto = getattr(event, "auto_skill", None)
+        # Fall back to global skills.auto_preload from config.yaml when
+        # no per-channel/topic skill is configured (CLI does this via
+        # cli.py → load_skill_auto_preload(); gateway was missing it).
+        if _is_new_session and not _auto:
+            try:
+                _auto = load_skill_auto_preload()
+            except Exception:
+                pass
         if _is_new_session and _auto:
             _skill_names = [_auto] if isinstance(_auto, str) else list(_auto)
+            _native_activations = _activate_gateway_auto_skills(_skill_names)
             try:
                 from agent.skill_commands import _load_skill_payload, _build_skill_message
                 _combined_parts: list[str] = []
