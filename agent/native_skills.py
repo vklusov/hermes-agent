@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from agent.bridge_bootstrap import ensure_bridge_runtime_context
+from tools import ask_expert as ask_expert_module
 from tools import routine_worker as routine_worker_module
 
 
@@ -46,6 +47,15 @@ def _activate_routine_worker() -> NativeSkillActivation:
     )
 
 
+def _activate_ask_expert() -> NativeSkillActivation:
+    _ = ask_expert_module.ask_expert
+    return NativeSkillActivation(
+        name="ask-expert",
+        mode="tool",
+        detail="ask_expert registered for gpt-5.5",
+    )
+
+
 _NATIVE_SKILLS: dict[str, NativeSkillSpec] = {
     "bridge-agents": NativeSkillSpec(
         name="bridge-agents",
@@ -56,6 +66,11 @@ _NATIVE_SKILLS: dict[str, NativeSkillSpec] = {
         name="routine-worker",
         mode="tool+routing",
         activate=_activate_routine_worker,
+    ),
+    "ask-expert": NativeSkillSpec(
+        name="ask-expert",
+        mode="tool",
+        activate=_activate_ask_expert,
     ),
 }
 

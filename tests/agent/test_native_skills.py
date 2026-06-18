@@ -4,10 +4,11 @@ from agent import native_skills as ns
 def test_resolve_native_skill_known():
     assert ns.resolve_native_skill("bridge-agents") is not None
     assert ns.resolve_native_skill("routine-worker") is not None
+    assert ns.resolve_native_skill("ask-expert") is not None
 
 
 def test_activate_auto_preloaded_native_skills_deduplicates(monkeypatch):
-    called = {"bridge": 0, "routine": 0}
+    called = {"bridge": 0, "routine": 0, "ask": 0}
 
     def fake_activate(name, mode):
         def _inner():
@@ -33,17 +34,23 @@ def test_activate_auto_preloaded_native_skills_deduplicates(monkeypatch):
                 mode="tool+routing",
                 activate=fake_activate("routine", "tool+routing"),
             ),
+            "ask-expert": ns.NativeSkillSpec(
+                name="ask-expert",
+                mode="tool",
+                activate=fake_activate("ask", "tool"),
+            ),
         },
     )
 
     activations = ns.activate_auto_preloaded_native_skills(
-        ["bridge-agents", "routine-worker", "missing-skill", "bridge-agents", ""]
+        ["bridge-agents", "routine-worker", "ask-expert", "missing-skill", "bridge-agents", ""]
     )
 
-    assert len(activations) == 2
-    assert [a.mode for a in activations] == ["bootstrap+prompt", "tool+routing"]
+    assert len(activations) == 3
+    assert [a.mode for a in activations] == ["bootstrap+prompt", "tool+routing", "tool"]
     assert called["bridge"] == 1
     assert called["routine"] == 1
+    assert called["ask"] == 1
 
 
 def test_activate_native_skill_unknown_returns_none():
@@ -66,6 +73,22 @@ def test_routine_worker_native_activation_exposes_core_tool():
     assert "routine_worker" in tool_names
 
 
+def test_ask_expert_native_activation_exposes_core_tool():
+    ns.activate_auto_preloaded_native_skills(["ask-expert"])
+
+    from model_tools import get_tool_definitions
+
+    tool_names = [
+        item["function"]["name"]
+        for item in get_tool_definitions(
+            enabled_toolsets=["hermes-cli"],
+            quiet_mode=True,
+            skip_tool_search_assembly=True,
+        )
+    ]
+    assert "ask_expert" in tool_names
+
+
 def test_format_native_skill_log_uses_standard_label():
     activations = [
         ns.NativeSkillActivation(
@@ -78,8 +101,13 @@ def test_format_native_skill_log_uses_standard_label():
             mode="tool+routing",
             detail="z",
         ),
+        ns.NativeSkillActivation(
+            name="ask-expert",
+            mode="tool",
+            detail="x",
+        ),
     ]
     assert (
         ns.format_native_skill_log(activations)
-        == "bridge-agents:bootstrap+prompt, routine-worker:tool+routing"
+        == "bridge-agents:bootstrap+prompt, routine-worker:tool+routing, ask-expert:tool"
     )

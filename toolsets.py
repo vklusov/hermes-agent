@@ -59,6 +59,8 @@ _HERMES_CORE_TOOLS = [
     "execute_code", "delegate_task",
     # Cronjob management
     "cronjob",
+    # Native expert escalation tool (policy/quota gated)
+    "ask_expert",
     # Native cheap worker for bounded routine text tasks
     "routine_worker",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
