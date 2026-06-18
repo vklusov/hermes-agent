@@ -38,6 +38,7 @@ def test_blank_memory_provider_does_not_auto_enable_honcho():
             return_value=honcho_cfg,
         ) as from_global_config,
         patch("plugins.memory.load_memory_provider") as load_memory_provider,
+        patch("agent.prefetch_knowledge.SilverbulletKnowledgeProvider.is_available", return_value=True),
         patch("agent.model_metadata.get_model_context_length", return_value=204_800),
         patch("run_agent.get_tool_definitions", return_value=[]),
         patch("run_agent.check_toolset_requirements", return_value={}),
@@ -53,7 +54,9 @@ def test_blank_memory_provider_does_not_auto_enable_honcho():
             skip_memory=False,
         )
 
-    assert agent._memory_manager is None
+    assert agent._memory_manager is not None
+    provider_names = [getattr(p, "name", None) for p in agent._memory_manager.providers]
+    assert "silverbullet_knowledge" in provider_names
     from_global_config.assert_not_called()
     load_memory_provider.assert_not_called()
     save_config.assert_not_called()

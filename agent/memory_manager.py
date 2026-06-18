@@ -463,6 +463,12 @@ class MemoryManager:
             try:
                 result = provider.prefetch(clean_query, session_id=session_id)
                 if result and result.strip():
+                    logger.info(
+                        "Memory provider '%s' prefetched %d chars for query=%r",
+                        provider.name,
+                        len(result),
+                        query[:120],
+                    )
                     parts.append(result)
             except Exception as e:
                 logger.debug(
