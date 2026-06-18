@@ -770,14 +770,17 @@ def run_conversation(
         # bytes are byte-stable across turns and upstream prompt caches
         # stay warm.
         effective_system = active_system_prompt or ""
-        if agent.ephemeral_system_prompt:
+        canonical_system_prompt = bool(getattr(agent, "_cached_system_prompt", None))
+        if agent.ephemeral_system_prompt and not canonical_system_prompt:
             effective_system = (effective_system + "\n\n" + agent.ephemeral_system_prompt).strip()
         if effective_system:
             api_messages = [{"role": "system", "content": effective_system}] + api_messages
 
         # Inject ephemeral prefill messages right after the system prompt
-        # but before conversation history. Same API-call-time-only pattern.
-        if agent.prefill_messages:
+        # but before conversation history. Skip this when the cached system
+        # prompt is already canonical for the current turn, to avoid
+        # re-expanding an already-compacted outbound payload.
+        if agent.prefill_messages and not canonical_system_prompt:
             sys_offset = 1 if (api_messages and api_messages[0].get("role") == "system") else 0
             for idx, pfm in enumerate(agent.prefill_messages):
                 api_messages.insert(sys_offset + idx, pfm.copy())

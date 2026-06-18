@@ -260,6 +260,18 @@ class TestPromptStabilityInvariant:
         # Byte-level check
         assert agent._cached_system_prompt.encode("utf-8") == stored.encode("utf-8")
 
+    def test_restored_prompt_is_not_rebuilt_with_ephemeral_suffix(self):
+        """A restored canonical prompt must not be rebuilt from multiple pieces."""
+        stored = "CANONICAL_PROMPT"
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": stored}
+        agent = _make_agent(session_db=db)
+        agent.ephemeral_system_prompt = "EPHEMERAL"
+
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+
+        assert agent._cached_system_prompt == stored
+        agent._build_system_prompt.assert_not_called()
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

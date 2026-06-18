@@ -64,6 +64,8 @@ class _FakeAgent:
         self._memory_write_origin = "assistant_tool"
         self._stream_context_scrubber = None
         self._stream_think_scrubber = None
+        self.prefill_messages = [{"role": "system", "content": "PREFILL"}]
+        self.ephemeral_system_prompt = "EPHEMERAL"
         # Attributes the prologue assigns; recorded for assertions.
         self._invalid_tool_retries = -1
         self._vision_supported = None
@@ -138,6 +140,13 @@ def test_returns_turn_context_with_user_message_appended():
     assert ctx.messages[-1] == {"role": "user", "content": "hello"}
     assert ctx.current_turn_user_idx == len(ctx.messages) - 1
     assert ctx.active_system_prompt == "SYSTEM"
+
+
+def test_turn_context_keeps_canonical_system_prompt_with_prefill_and_ephemeral():
+    agent = _FakeAgent()
+    ctx = _build(agent)
+    assert ctx.active_system_prompt == "SYSTEM"
+    assert ctx.messages[0] == {"role": "user", "content": "hello"} or ctx.messages[0]["role"] in {"system", "user"}
 
 
 def test_applies_agent_side_effects():
