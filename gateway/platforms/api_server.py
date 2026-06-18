@@ -3388,12 +3388,23 @@ class APIServerAdapter(BasePlatformAdapter):
         if not isinstance(agent_messages, list) or not agent_messages:
             return 0
 
-        prior = list(conversation_history)
+        def _strip_heavy_codex_fields(msg: Dict[str, Any]) -> Dict[str, Any]:
+            if not isinstance(msg, dict):
+                return msg
+            if msg.get("role") != "assistant":
+                return dict(msg)
+            cleaned = dict(msg)
+            cleaned.pop("codex_reasoning_items", None)
+            cleaned.pop("codex_message_items", None)
+            return cleaned
+
+        prior = [_strip_heavy_codex_fields(m) for m in conversation_history]
+        normalized_agent_messages = [_strip_heavy_codex_fields(m) for m in agent_messages]
         current_user = {"role": "user", "content": user_message}
         expected_prefix = prior + [current_user]
-        if agent_messages[:len(expected_prefix)] == expected_prefix:
+        if normalized_agent_messages[:len(expected_prefix)] == expected_prefix:
             return len(expected_prefix)
-        if prior and agent_messages[:len(prior)] == prior:
+        if prior and normalized_agent_messages[:len(prior)] == prior:
             return len(prior)
         return 0
 

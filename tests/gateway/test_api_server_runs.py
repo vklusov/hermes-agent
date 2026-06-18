@@ -93,6 +93,37 @@ def auth_adapter():
     return _make_adapter(api_key="sk-secret")
 
 
+class TestRunTranscriptMessages:
+    def test_detects_transcript_prefix_with_codex_assistant_metadata(self):
+        conversation_history = [{"role": "assistant", "content": "previous answer"}]
+        result = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "previous answer",
+                    "codex_reasoning_items": [{"id": "rs_1", "encrypted_content": "enc"}],
+                    "codex_message_items": [{"id": "msg_1", "type": "message"}],
+                },
+                {"role": "user", "content": "continue"},
+                {"role": "assistant", "content": "new answer"},
+            ]
+        }
+
+        assert (
+            APIServerAdapter._response_messages_turn_start_index(
+                conversation_history,
+                "continue",
+                result,
+            )
+            == 2
+        )
+        assert APIServerAdapter._turn_transcript_messages(
+            conversation_history,
+            "continue",
+            result,
+        ) == [{"role": "assistant", "content": "new answer"}]
+
+
 # ---------------------------------------------------------------------------
 # POST /v1/runs — start a run
 # ---------------------------------------------------------------------------
