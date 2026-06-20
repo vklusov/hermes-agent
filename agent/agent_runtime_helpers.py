@@ -99,9 +99,19 @@ def _ra():
 
 
 AGENT_RUNTIME_POST_HOOK_TOOL_NAMES = frozenset(
-    {"todo", "session_search", "memory", "clarify", "read_terminal", "read_preview", "read_window_below", "setup_mcp", "delegate_task"}
+    {
+        "todo",
+        "session_search",
+        "memory",
+        "clarify",
+        "read_terminal",
+        "read_preview",
+        "read_window_below",
+        "setup_mcp",
+        "delegate_task",
+        "routine_worker",
+    }
 )
-
 
 def agent_runtime_owns_post_tool_hook(agent: Any, function_name: str) -> bool:
     """Return True when an agent-level tool path emits its own post hook."""
@@ -3169,6 +3179,10 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     elif function_name == "delegate_task":
         def _execute(next_args: dict) -> Any:
             return _finish_agent_tool(agent._dispatch_delegate_task(next_args), next_args)
+    elif function_name == "routine_worker":
+        def _execute(next_args: dict) -> Any:
+            from tools.routine_worker import build_routine_delegate_args
+            return _finish_agent_tool(agent._dispatch_delegate_task(build_routine_delegate_args(next_args)), next_args)
     else:
         def _execute(next_args: dict) -> Any:
             dispatch_kwargs = dict(
