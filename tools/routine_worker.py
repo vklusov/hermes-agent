@@ -1,13 +1,12 @@
 """Native routine-worker tool.
 
 This tool gives the main agent an explicit, low-friction route for broad but
-routine subtasks that should run on the configured delegation worker model
-instead of consuming the main session model for every reasoning step.
+routine subtasks that should run on configured worker routes instead of
+consuming the main session model for every reasoning step.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from tools.registry import registry, tool_error
@@ -17,18 +16,25 @@ ROUTINE_WORKER_SCHEMA = {
     "name": "routine_worker",
     "description": (
         "Dispatch routine, source-specific work to configured worker subagents "
-        "(delegation.provider/model, e.g. gpt-5.4-mini) while the main agent "
-        "stays as orchestrator. Use this by default for broad marketplace, "
-        "travel, web research, and KB triage tasks where independent sources "
-        "can be checked in parallel. The tool wraps delegate_task with safe "
-        "presets; it does not perform external writes or purchases."
+        "while the main agent stays as orchestrator. Use this by default for "
+        "broad marketplace, travel, web research, and KB triage tasks where "
+        "independent sources can be checked in parallel. The tool wraps "
+        "delegate_task with safe presets and per-task model routing; it does "
+        "not perform external writes or purchases."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "task_type": {
                 "type": "string",
-                "enum": ["marketplace_research", "web_research", "kb_triage", "single"],
+                "enum": [
+                    "marketplace_research",
+                    "web_research",
+                    "web_research_strong",
+                    "cheap_flash",
+                    "kb_triage",
+                    "single",
+                ],
                 "description": (
                     "Preset routing kind. marketplace_research splits into "
                     "Yandex Market, Wildberries, and search/Ozon visual fallback workers."
@@ -67,6 +73,15 @@ ROUTINE_WORKER_SCHEMA = {
 
 _MARKETPLACE_DEFAULT_SOURCES = ["Yandex Market", "Wildberries", "Search/Ozon visual fallback"]
 
+_DEFAULT_ROUTING: dict[str, dict[str, str]] = {
+    "default": {"provider": "custom:neurogate-anthropic", "model": "minimax-m3"},
+    "marketplace_research": {"provider": "custom:neurogate-anthropic", "model": "minimax-m3"},
+    "web_research": {"provider": "custom:neurogate-anthropic", "model": "minimax-m3"},
+    "web_research_strong": {"provider": "custom:neurogate-anthropic", "model": "qwen3.7-plus"},
+    "cheap_flash": {"provider": "custom:neurogate-chat", "model": "deepseek-v4-flash"},
+    "kb_triage": {"provider": "custom:neurogate", "model": "gpt-5.4-mini"},
+}
+
 
 def _compact(value: Any) -> str:
     return str(value or "").strip()
@@ -85,6 +100,44 @@ def _worker_context(base_context: str, extra: str) -> str:
     return "\n".join(parts)
 
 
+def _load_routine_worker_config() -> dict[str, Any]:
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+        section = cfg.get("routine_worker") if isinstance(cfg, dict) else None
+        return section if isinstance(section, dict) else {}
+    except Exception:
+        return {}
+
+
+def resolve_routine_route(task_type: str, config: dict[str, Any] | None = None) -> dict[str, str]:
+    """Resolve provider/model for a routine-worker preset.
+
+    Config wins, then built-in defaults. Returns only non-empty string values so
+    callers can merge the result directly into delegate_task args.
+    """
+    cfg = config if config is not None else _load_routine_worker_config()
+    task_type = _compact(task_type) or "single"
+
+    route: dict[str, Any] = {}
+    if isinstance(cfg, dict):
+        candidate = cfg.get(task_type) or cfg.get("default")
+        if isinstance(candidate, dict):
+            route.update(candidate)
+
+    if not route:
+        route.update(_DEFAULT_ROUTING.get(task_type) or _DEFAULT_ROUTING["default"])
+
+    return {
+        key: str(value).strip()
+        for key, value in route.items()
+        if key in {"provider", "model", "base_url", "api_key", "api_mode"}
+        and isinstance(value, str)
+        and value.strip()
+    }
+
+
 def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
     """Translate routine_worker args into delegate_task-compatible args."""
     task_type = _compact(args.get("task_type")) or "single"
@@ -95,6 +148,8 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
 
     if not objective:
         raise ValueError("routine_worker requires a non-empty objective")
+
+    route = resolve_routine_route(task_type)
 
     if task_type == "marketplace_research":
         selected = sources or _MARKETPLACE_DEFAULT_SOURCES
@@ -119,9 +174,9 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
                 "toolsets": worker_toolsets,
                 "role": "leaf",
             })
-        return {"tasks": tasks, "background": False}
+        return {"tasks": tasks, "background": False, **route}
 
-    if task_type == "web_research":
+    if task_type in {"web_research", "web_research_strong", "cheap_flash"}:
         selected = sources or ["official/source docs", "web search results", "secondary verification"]
         tasks = [
             {
@@ -132,7 +187,7 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
             }
             for source in selected[:3]
         ]
-        return {"tasks": tasks, "background": False}
+        return {"tasks": tasks, "background": False, **route}
 
     if task_type == "kb_triage":
         return {
@@ -144,6 +199,7 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
             "toolsets": toolsets or ["file", "session_search"],
             "role": "leaf",
             "background": bool(args.get("background", False)),
+            **route,
         }
 
     return {
@@ -152,6 +208,7 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
         "toolsets": toolsets or ["web", "file"],
         "role": "leaf",
         "background": bool(args.get("background", False)),
+        **route,
     }
 
 

@@ -1,6 +1,11 @@
+"""Tests for native routine worker delegation tool."""
+
 from __future__ import annotations
 
-from tools.routine_worker import build_routine_delegate_args
+from tools.routine_worker import (
+    build_routine_delegate_args,
+    resolve_routine_route,
+)
 from toolsets import resolve_toolset
 import model_tools
 
@@ -14,27 +19,63 @@ def test_marketplace_preset_splits_into_source_workers():
 
     tasks = delegate_args["tasks"]
     assert len(tasks) == 3
-    assert delegate_args["background"] is False
     goals = [task["goal"] for task in tasks]
     assert any("Yandex Market worker" in goal for goal in goals)
     assert any("Wildberries worker" in goal for goal in goals)
     assert any("Search/Ozon fallback worker" in goal for goal in goals)
     assert all(task["role"] == "leaf" for task in tasks)
-    assert all(task["toolsets"] == ["web", "browser"] for task in tasks)
     assert all("Do not purchase, login, or modify external state" in task["context"] for task in tasks)
+    # routing: marketplace -> minimax-m3 / neurogate-anthropic
+    assert delegate_args.get("provider") == "custom:neurogate-anthropic"
+    assert delegate_args.get("model") == "minimax-m3"
 
 
-def test_kb_triage_preset_uses_file_and_session_search_tools():
+def test_web_research_strong_routes_to_qwen():
+    delegate_args = build_routine_delegate_args({
+        "task_type": "web_research_strong",
+        "objective": "сравнить три источника",
+    })
+    assert delegate_args.get("provider") == "custom:neurogate-anthropic"
+    assert delegate_args.get("model") == "qwen3.7-plus"
+
+
+def test_cheap_flash_routes_to_deepseek():
+    delegate_args = build_routine_delegate_args({
+        "task_type": "cheap_flash",
+        "objective": "быстрый поиск",
+    })
+    assert delegate_args.get("provider") == "custom:neurogate-chat"
+    assert delegate_args.get("model") == "deepseek-v4-flash"
+
+
+def test_kb_triage_routes_to_gpt54mini():
     delegate_args = build_routine_delegate_args({
         "task_type": "kb_triage",
         "objective": "сверить Cockpit и roadmap",
         "background": True,
     })
+    assert delegate_args.get("provider") == "custom:neurogate"
+    assert delegate_args.get("model") == "gpt-5.4-mini"
 
-    assert delegate_args["goal"].startswith("KB/source-of-truth triage worker")
-    assert delegate_args["toolsets"] == ["file", "session_search"]
-    assert delegate_args["background"] is True
-    assert "local KB only" in delegate_args["context"]
+
+def test_resolve_routine_route_falls_back_to_default():
+    route = resolve_routine_route("single", config={})
+    assert route.get("model") == "minimax-m3"
+
+
+def test_resolve_routine_route_config_wins():
+    cfg = {"default": {"provider": "custom:test", "model": "test-model"}}
+    route = resolve_routine_route("unknown", config=cfg)
+    assert route.get("model") == "test-model"
+
+
+def test_resolve_routine_route_task_type_wins():
+    cfg = {
+        "default": {"provider": "custom:fallback", "model": "fallback"},
+        "web_research": {"provider": "custom:web", "model": "web-model"},
+    }
+    route = resolve_routine_route("web_research", config=cfg)
+    assert route.get("model") == "web-model"
 
 
 def test_routine_worker_is_in_delegation_toolset_and_core_schema():

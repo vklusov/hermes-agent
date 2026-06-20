@@ -3430,6 +3430,13 @@ def delegate_task(
     context: Optional[str] = None,
     tasks: Optional[List[Dict[str, Any]]] = None,
     max_iterations: Optional[int] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    api_mode: Optional[str] = None,
+    acp_command: Optional[str] = None,
+    acp_args: Optional[List[str]] = None,
     role: Optional[str] = None,
     background: Optional[bool] = None,
     output_schema: Optional[Dict[str, Any]] = None,
@@ -3509,8 +3516,20 @@ def delegate_task(
             f"multiplies API cost)."
         )
 
-    # Load config
-    cfg = _load_config()
+    # Load config. Internal callers (currently routine_worker) may pass
+    # per-call provider/model overrides; the public delegate_task schema does
+    # not expose these fields, so ordinary model-emitted delegation remains
+    # governed by the user's global delegation config.
+    cfg = dict(_load_config())
+    for _key, _value in {
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "api_key": api_key,
+        "api_mode": api_mode,
+    }.items():
+        if isinstance(_value, str) and _value.strip():
+            cfg[_key] = _value.strip()
     default_max_iter = cfg.get("max_iterations", DEFAULT_MAX_ITERATIONS)
     # Model-supplied max_iterations is ignored — the config value is authoritative
     # so users get predictable budgets. The kwarg is retained for internal callers
@@ -4720,6 +4739,13 @@ registry.register(
         context=args.get("context"),
         tasks=_strip_model_hidden_task_fields(args.get("tasks")),
         max_iterations=args.get("max_iterations"),
+        provider=args.get("provider"),
+        model=args.get("model"),
+        base_url=args.get("base_url"),
+        api_key=args.get("api_key"),
+        api_mode=args.get("api_mode"),
+        acp_command=args.get("acp_command"),
+        acp_args=args.get("acp_args"),
         role=args.get("role"),
         background=_model_background_value(args, kw.get("parent_agent")),
         output_schema=args.get("output_schema"),
