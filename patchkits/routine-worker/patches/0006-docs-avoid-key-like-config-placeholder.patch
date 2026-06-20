@@ -1,0 +1,25 @@
+From 1eeb068bce7d9bb9c1524d40e777ebb32343a0e5 Mon Sep 17 00:00:00 2001
+From: Archivarius <archivarius@local>
+Date: Sat, 20 Jun 2026 11:57:44 +0000
+Subject: [PATCH 6/6] docs: avoid key-like config placeholder
+
+---
+ skills/autonomous-ai-agents/routine-worker/README.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/skills/autonomous-ai-agents/routine-worker/README.md b/skills/autonomous-ai-agents/routine-worker/README.md
+index 2d1deda39..a91516fa6 100644
+--- a/skills/autonomous-ai-agents/routine-worker/README.md
++++ b/skills/autonomous-ai-agents/routine-worker/README.md
+@@ -65,7 +65,7 @@ Each route may contain:
+ provider: custom:provider-name   # or a built-in Hermes provider id
+ model: model-name
+ base_url: https://override.example/v1   # optional, usually prefer custom_providers
+-api_key: sk-...                         # optional, avoid committing this
++api_key: "<API_KEY>"                    # optional, avoid committing this
+ api_mode: anthropic_messages            # optional, usually belongs on provider
+ ```
+ 
+-- 
+2.34.1
+

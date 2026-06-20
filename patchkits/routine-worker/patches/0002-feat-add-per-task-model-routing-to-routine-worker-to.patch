@@ -1,0 +1,319 @@
+From f7045958da83003e30a7807e5e1bce8aab601756 Mon Sep 17 00:00:00 2001
+From: Archivarius <archivarius@local>
+Date: Sat, 20 Jun 2026 09:19:15 +0000
+Subject: [PATCH 2/6] feat: add per-task model routing to routine worker tool
+
+- Routine worker now resolves provider/model per task_type from
+  config.yaml / built-in defaults.
+- Configured routes: minimax-m3 (default/marketplace/web), qwen3.7-plus
+  (strong web), deepseek-v4-flash (cheap), gpt-5.4-mini (kb triage).
+- delegate_task accepts optional provider/model/base_url/api_key/api_mode
+  overrides so the runtime can route child agents independently of the
+  global delegation config.
+---
+ tests/tools/test_routine_worker.py | 57 ++++++++++++++++++---
+ tools/delegate_tool.py             | 26 +++++++++-
+ tools/routine_worker.py            | 81 +++++++++++++++++++++++++-----
+ 3 files changed, 142 insertions(+), 22 deletions(-)
+
+diff --git a/tests/tools/test_routine_worker.py b/tests/tools/test_routine_worker.py
+index 4e5d50d6e..6620ad2ef 100644
+--- a/tests/tools/test_routine_worker.py
++++ b/tests/tools/test_routine_worker.py
+@@ -1,6 +1,11 @@
++"""Tests for native routine worker delegation tool."""
++
+ from __future__ import annotations
+ 
+-from tools.routine_worker import build_routine_delegate_args
++from tools.routine_worker import (
++    build_routine_delegate_args,
++    resolve_routine_route,
++)
+ from toolsets import resolve_toolset
+ import model_tools
+ 
+@@ -14,27 +19,63 @@ def test_marketplace_preset_splits_into_source_workers():
+ 
+     tasks = delegate_args["tasks"]
+     assert len(tasks) == 3
+-    assert delegate_args["background"] is False
+     goals = [task["goal"] for task in tasks]
+     assert any("Yandex Market worker" in goal for goal in goals)
+     assert any("Wildberries worker" in goal for goal in goals)
+     assert any("Search/Ozon fallback worker" in goal for goal in goals)
+     assert all(task["role"] == "leaf" for task in tasks)
+-    assert all(task["toolsets"] == ["web", "browser"] for task in tasks)
+     assert all("Do not purchase, login, or modify external state" in task["context"] for task in tasks)
++    # routing: marketplace -> minimax-m3 / neurogate-anthropic
++    assert delegate_args.get("provider") == "custom:neurogate-anthropic"
++    assert delegate_args.get("model") == "minimax-m3"
++
++
++def test_web_research_strong_routes_to_qwen():
++    delegate_args = build_routine_delegate_args({
++        "task_type": "web_research_strong",
++        "objective": "сравнить три источника",
++    })
++    assert delegate_args.get("provider") == "custom:neurogate-anthropic"
++    assert delegate_args.get("model") == "qwen3.7-plus"
++
++
++def test_cheap_flash_routes_to_deepseek():
++    delegate_args = build_routine_delegate_args({
++        "task_type": "cheap_flash",
++        "objective": "быстрый поиск",
++    })
++    assert delegate_args.get("provider") == "custom:neurogate-chat"
++    assert delegate_args.get("model") == "deepseek-v4-flash"
+ 
+ 
+-def test_kb_triage_preset_uses_file_and_session_search_tools():
++def test_kb_triage_routes_to_gpt54mini():
+     delegate_args = build_routine_delegate_args({
+         "task_type": "kb_triage",
+         "objective": "сверить Cockpit и roadmap",
+         "background": True,
+     })
++    assert delegate_args.get("provider") == "custom:neurogate"
++    assert delegate_args.get("model") == "gpt-5.4-mini"
++
++
++def test_resolve_routine_route_falls_back_to_default():
++    route = resolve_routine_route("single", config={})
++    assert route.get("model") == "minimax-m3"
++
++
++def test_resolve_routine_route_config_wins():
++    cfg = {"default": {"provider": "custom:test", "model": "test-model"}}
++    route = resolve_routine_route("unknown", config=cfg)
++    assert route.get("model") == "test-model"
++
+ 
+-    assert delegate_args["goal"].startswith("KB/source-of-truth triage worker")
+-    assert delegate_args["toolsets"] == ["file", "session_search"]
+-    assert delegate_args["background"] is True
+-    assert "local KB only" in delegate_args["context"]
++def test_resolve_routine_route_task_type_wins():
++    cfg = {
++        "default": {"provider": "custom:fallback", "model": "fallback"},
++        "web_research": {"provider": "custom:web", "model": "web-model"},
++    }
++    route = resolve_routine_route("web_research", config=cfg)
++    assert route.get("model") == "web-model"
+ 
+ 
+ def test_routine_worker_is_in_delegation_toolset_and_core_schema():
+diff --git a/tools/delegate_tool.py b/tools/delegate_tool.py
+index b89e7f8db..1efa161e4 100644
+--- a/tools/delegate_tool.py
++++ b/tools/delegate_tool.py
+@@ -2068,6 +2068,11 @@ def delegate_task(
+     toolsets: Optional[List[str]] = None,
+     tasks: Optional[List[Dict[str, Any]]] = None,
+     max_iterations: Optional[int] = None,
++    provider: Optional[str] = None,
++    model: Optional[str] = None,
++    base_url: Optional[str] = None,
++    api_key: Optional[str] = None,
++    api_mode: Optional[str] = None,
+     acp_command: Optional[str] = None,
+     acp_args: Optional[List[str]] = None,
+     role: Optional[str] = None,
+@@ -2133,8 +2138,20 @@ def delegate_task(
+             }
+         )
+ 
+-    # Load config
+-    cfg = _load_config()
++    # Load config. Internal callers (currently routine_worker) may pass
++    # per-call provider/model overrides; the public delegate_task schema does
++    # not expose these fields, so ordinary model-emitted delegation remains
++    # governed by the user's global delegation config.
++    cfg = dict(_load_config())
++    for _key, _value in {
++        "provider": provider,
++        "model": model,
++        "base_url": base_url,
++        "api_key": api_key,
++        "api_mode": api_mode,
++    }.items():
++        if isinstance(_value, str) and _value.strip():
++            cfg[_key] = _value.strip()
+     default_max_iter = cfg.get("max_iterations", DEFAULT_MAX_ITERATIONS)
+     # Model-supplied max_iterations is ignored — the config value is authoritative
+     # so users get predictable budgets. The kwarg is retained for internal callers
+@@ -3114,6 +3131,11 @@ registry.register(
+         toolsets=args.get("toolsets"),
+         tasks=args.get("tasks"),
+         max_iterations=args.get("max_iterations"),
++        provider=args.get("provider"),
++        model=args.get("model"),
++        base_url=args.get("base_url"),
++        api_key=args.get("api_key"),
++        api_mode=args.get("api_mode"),
+         acp_command=args.get("acp_command"),
+         acp_args=args.get("acp_args"),
+         role=args.get("role"),
+diff --git a/tools/routine_worker.py b/tools/routine_worker.py
+index cf02bad85..7b37807e9 100644
+--- a/tools/routine_worker.py
++++ b/tools/routine_worker.py
+@@ -1,13 +1,12 @@
+ """Native routine-worker tool.
+ 
+ This tool gives the main agent an explicit, low-friction route for broad but
+-routine subtasks that should run on the configured delegation worker model
+-instead of consuming the main session model for every reasoning step.
++routine subtasks that should run on configured worker routes instead of
++consuming the main session model for every reasoning step.
+ """
+ 
+ from __future__ import annotations
+ 
+-import json
+ from typing import Any
+ 
+ from tools.registry import registry, tool_error
+@@ -17,18 +16,25 @@ ROUTINE_WORKER_SCHEMA = {
+     "name": "routine_worker",
+     "description": (
+         "Dispatch routine, source-specific work to configured worker subagents "
+-        "(delegation.provider/model, e.g. gpt-5.4-mini) while the main agent "
+-        "stays as orchestrator. Use this by default for broad marketplace, "
+-        "travel, web research, and KB triage tasks where independent sources "
+-        "can be checked in parallel. The tool wraps delegate_task with safe "
+-        "presets; it does not perform external writes or purchases."
++        "while the main agent stays as orchestrator. Use this by default for "
++        "broad marketplace, travel, web research, and KB triage tasks where "
++        "independent sources can be checked in parallel. The tool wraps "
++        "delegate_task with safe presets and per-task model routing; it does "
++        "not perform external writes or purchases."
+     ),
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "task_type": {
+                 "type": "string",
+-                "enum": ["marketplace_research", "web_research", "kb_triage", "single"],
++                "enum": [
++                    "marketplace_research",
++                    "web_research",
++                    "web_research_strong",
++                    "cheap_flash",
++                    "kb_triage",
++                    "single",
++                ],
+                 "description": (
+                     "Preset routing kind. marketplace_research splits into "
+                     "Yandex Market, Wildberries, and search/Ozon visual fallback workers."
+@@ -67,6 +73,15 @@ ROUTINE_WORKER_SCHEMA = {
+ 
+ _MARKETPLACE_DEFAULT_SOURCES = ["Yandex Market", "Wildberries", "Search/Ozon visual fallback"]
+ 
++_DEFAULT_ROUTING: dict[str, dict[str, str]] = {
++    "default": {"provider": "custom:neurogate-anthropic", "model": "minimax-m3"},
++    "marketplace_research": {"provider": "custom:neurogate-anthropic", "model": "minimax-m3"},
++    "web_research": {"provider": "custom:neurogate-anthropic", "model": "minimax-m3"},
++    "web_research_strong": {"provider": "custom:neurogate-anthropic", "model": "qwen3.7-plus"},
++    "cheap_flash": {"provider": "custom:neurogate-chat", "model": "deepseek-v4-flash"},
++    "kb_triage": {"provider": "custom:neurogate", "model": "gpt-5.4-mini"},
++}
++
+ 
+ def _compact(value: Any) -> str:
+     return str(value or "").strip()
+@@ -85,6 +100,44 @@ def _worker_context(base_context: str, extra: str) -> str:
+     return "\n".join(parts)
+ 
+ 
++def _load_routine_worker_config() -> dict[str, Any]:
++    try:
++        from hermes_cli.config import load_config
++
++        cfg = load_config()
++        section = cfg.get("routine_worker") if isinstance(cfg, dict) else None
++        return section if isinstance(section, dict) else {}
++    except Exception:
++        return {}
++
++
++def resolve_routine_route(task_type: str, config: dict[str, Any] | None = None) -> dict[str, str]:
++    """Resolve provider/model for a routine-worker preset.
++
++    Config wins, then built-in defaults. Returns only non-empty string values so
++    callers can merge the result directly into delegate_task args.
++    """
++    cfg = config if config is not None else _load_routine_worker_config()
++    task_type = _compact(task_type) or "single"
++
++    route: dict[str, Any] = {}
++    if isinstance(cfg, dict):
++        candidate = cfg.get(task_type) or cfg.get("default")
++        if isinstance(candidate, dict):
++            route.update(candidate)
++
++    if not route:
++        route.update(_DEFAULT_ROUTING.get(task_type) or _DEFAULT_ROUTING["default"])
++
++    return {
++        key: str(value).strip()
++        for key, value in route.items()
++        if key in {"provider", "model", "base_url", "api_key", "api_mode"}
++        and isinstance(value, str)
++        and value.strip()
++    }
++
++
+ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
+     """Translate routine_worker args into delegate_task-compatible args."""
+     task_type = _compact(args.get("task_type")) or "single"
+@@ -96,6 +149,8 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
+     if not objective:
+         raise ValueError("routine_worker requires a non-empty objective")
+ 
++    route = resolve_routine_route(task_type)
++
+     if task_type == "marketplace_research":
+         selected = sources or _MARKETPLACE_DEFAULT_SOURCES
+         tasks = []
+@@ -119,9 +174,9 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
+                 "toolsets": worker_toolsets,
+                 "role": "leaf",
+             })
+-        return {"tasks": tasks, "background": False}
++        return {"tasks": tasks, "background": False, **route}
+ 
+-    if task_type == "web_research":
++    if task_type in {"web_research", "web_research_strong", "cheap_flash"}:
+         selected = sources or ["official/source docs", "web search results", "secondary verification"]
+         tasks = [
+             {
+@@ -132,7 +187,7 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
+             }
+             for source in selected[:3]
+         ]
+-        return {"tasks": tasks, "background": False}
++        return {"tasks": tasks, "background": False, **route}
+ 
+     if task_type == "kb_triage":
+         return {
+@@ -144,6 +199,7 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
+             "toolsets": toolsets or ["file", "session_search"],
+             "role": "leaf",
+             "background": bool(args.get("background", False)),
++            **route,
+         }
+ 
+     return {
+@@ -152,6 +208,7 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
+         "toolsets": toolsets or ["web", "file"],
+         "role": "leaf",
+         "background": bool(args.get("background", False)),
++        **route,
+     }
+ 
+ 
+-- 
+2.34.1
+

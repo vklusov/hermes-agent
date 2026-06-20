@@ -1,0 +1,44 @@
+# Neurogate-style routine_worker routing example.
+# Merge into ~/.hermes/config.yaml and replace YOUR-NEUROGATE-ENDPOINT.
+# Store the actual key in NEUROGATE_API_KEY or your Hermes .env.
+
+custom_providers:
+  neurogate-anthropic:
+    base_url: https://YOUR-NEUROGATE-ENDPOINT/v1
+    api_key_env: NEUROGATE_API_KEY
+    api_mode: anthropic_messages
+
+  neurogate-chat:
+    base_url: https://YOUR-NEUROGATE-ENDPOINT/v1
+    api_key_env: NEUROGATE_API_KEY
+    api_mode: chat_completions
+
+  neurogate-responses:
+    base_url: https://YOUR-NEUROGATE-ENDPOINT/v1
+    api_key_env: NEUROGATE_API_KEY
+    api_mode: codex_responses
+
+routine_worker:
+  default:
+    provider: custom:neurogate-anthropic
+    model: minimax-m3
+
+  marketplace_research:
+    provider: custom:neurogate-anthropic
+    model: minimax-m3
+
+  web_research:
+    provider: custom:neurogate-anthropic
+    model: minimax-m3
+
+  web_research_strong:
+    provider: custom:neurogate-anthropic
+    model: qwen3.7-plus
+
+  cheap_flash:
+    provider: custom:neurogate-chat
+    model: deepseek-v4-flash
+
+  kb_triage:
+    provider: custom:neurogate-responses
+    model: gpt-5.4-mini

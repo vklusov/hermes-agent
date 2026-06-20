@@ -1,0 +1,44 @@
+# Generic routine_worker routing example.
+# Merge these sections into ~/.hermes/config.yaml and adapt names/models.
+# Secrets should live in env vars, not in config committed to git.
+
+custom_providers:
+  my-anthropic-compatible:
+    base_url: https://example.com/v1
+    api_key_env: MY_PROVIDER_API_KEY
+    api_mode: anthropic_messages
+
+  my-chat-compatible:
+    base_url: https://example.com/v1
+    api_key_env: MY_PROVIDER_API_KEY
+    api_mode: chat_completions
+
+  my-responses-compatible:
+    base_url: https://example.com/v1
+    api_key_env: MY_PROVIDER_API_KEY
+    api_mode: codex_responses
+
+routine_worker:
+  default:
+    provider: custom:my-anthropic-compatible
+    model: minimax-m3
+
+  marketplace_research:
+    provider: custom:my-anthropic-compatible
+    model: minimax-m3
+
+  web_research:
+    provider: custom:my-anthropic-compatible
+    model: minimax-m3
+
+  web_research_strong:
+    provider: custom:my-anthropic-compatible
+    model: qwen3.7-plus
+
+  cheap_flash:
+    provider: custom:my-chat-compatible
+    model: deepseek-v4-flash
+
+  kb_triage:
+    provider: custom:my-responses-compatible
+    model: gpt-5.4-mini

@@ -1,0 +1,27 @@
+# Built-in provider routine_worker routing example.
+# Use only if these providers/models are configured and available in your Hermes setup.
+
+routine_worker:
+  default:
+    provider: minimax
+    model: minimax-m3
+
+  marketplace_research:
+    provider: minimax
+    model: minimax-m3
+
+  web_research:
+    provider: minimax
+    model: minimax-m3
+
+  web_research_strong:
+    provider: alibaba
+    model: qwen3.7-plus
+
+  cheap_flash:
+    provider: deepseek
+    model: deepseek-v4-flash
+
+  kb_triage:
+    provider: openrouter
+    model: openai/gpt-5.4-mini

@@ -1,0 +1,79 @@
+From c7eda072df462171e71e75dddb31c435333f7c97 Mon Sep 17 00:00:00 2001
+From: Archivarius <archivarius@local>
+Date: Sat, 20 Jun 2026 09:47:25 +0000
+Subject: [PATCH 3/6] fix: forward routine worker model overrides through agent
+ dispatch
+
+---
+ run_agent.py                 |  5 +++++
+ tests/tools/test_delegate.py | 38 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/run_agent.py b/run_agent.py
+index 7c195b35c..32c86920d 100644
+--- a/run_agent.py
++++ b/run_agent.py
+@@ -5190,6 +5190,11 @@ class AIAgent:
+             toolsets=function_args.get("toolsets"),
+             tasks=function_args.get("tasks"),
+             max_iterations=function_args.get("max_iterations"),
++            provider=function_args.get("provider"),
++            model=function_args.get("model"),
++            base_url=function_args.get("base_url"),
++            api_key=function_args.get("api_key"),
++            api_mode=function_args.get("api_mode"),
+             acp_command=function_args.get("acp_command"),
+             acp_args=function_args.get("acp_args"),
+             role=function_args.get("role"),
+diff --git a/tests/tools/test_delegate.py b/tests/tools/test_delegate.py
+index 911025e99..1334d0f1b 100644
+--- a/tests/tools/test_delegate.py
++++ b/tests/tools/test_delegate.py
+@@ -2036,6 +2036,44 @@ class TestDispatchDelegateTask(unittest.TestCase):
+             self.assertEqual(kwargs["override_acp_command"], "claude")
+             self.assertEqual(kwargs["override_acp_args"], ["--acp", "--stdio"])
+ 
++    @patch("tools.delegate_tool._load_config", return_value={})
++    @patch("tools.delegate_tool._resolve_delegation_credentials")
++    def test_provider_model_overrides_forwarded(self, mock_creds, mock_cfg):
++        """Per-call provider/model overrides reach delegate_task via the helper."""
++        mock_creds.return_value = {
++            "provider": "custom:test", "base_url": "https://example.test/v1",
++            "api_key": "sk-test", "api_mode": "chat_completions", "model": "test-model",
++        }
++        parent = _make_mock_parent(depth=0)
++        with patch("tools.delegate_tool._build_child_agent") as mock_build:
++            mock_child = MagicMock()
++            mock_child.run_conversation.return_value = {
++                "final_response": "done", "completed": True,
++                "api_calls": 1, "messages": [],
++            }
++            mock_child._delegate_saved_tool_names = []
++            mock_child._credential_pool = None
++            mock_child.session_prompt_tokens = 0
++            mock_child.session_completion_tokens = 0
++            mock_child.model = "test-model"
++            mock_build.return_value = mock_child
++
++            delegate_task(
++                goal="test",
++                provider="custom:test",
++                model="test-model",
++                base_url="https://example.test/v1",
++                api_key="sk-test",
++                api_mode="chat_completions",
++                parent_agent=parent,
++            )
++            _, kwargs = mock_build.call_args
++            self.assertEqual(kwargs["model"], "test-model")
++            self.assertEqual(kwargs["override_provider"], "custom:test")
++            self.assertEqual(kwargs["override_base_url"], "https://example.test/v1")
++            self.assertEqual(kwargs["override_api_key"], "sk-test")
++            self.assertEqual(kwargs["override_api_mode"], "chat_completions")
++
+ class TestDelegateEventEnum(unittest.TestCase):
+     """Tests for DelegateEvent enum and back-compat aliases."""
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,341 @@
+From baed27a141419c0c3ae0d3e28397cd87017a30c3 Mon Sep 17 00:00:00 2001
+From: Archivarius <archivarius@local>
+Date: Sat, 20 Jun 2026 08:39:37 +0000
+Subject: [PATCH 1/6] feat: add native routine worker tool
+
+---
+ agent/agent_runtime_helpers.py     |   6 +-
+ agent/tool_executor.py             |  31 +++++
+ tests/tools/test_routine_worker.py |  47 ++++++++
+ tools/routine_worker.py            | 174 +++++++++++++++++++++++++++++
+ toolsets.py                        |   6 +-
+ 5 files changed, 260 insertions(+), 4 deletions(-)
+ create mode 100644 tests/tools/test_routine_worker.py
+ create mode 100644 tools/routine_worker.py
+
+diff --git a/agent/agent_runtime_helpers.py b/agent/agent_runtime_helpers.py
+index 4a267f955..e787935dd 100644
+--- a/agent/agent_runtime_helpers.py
++++ b/agent/agent_runtime_helpers.py
+@@ -49,7 +49,7 @@ def _ra():
+ 
+ 
+ AGENT_RUNTIME_POST_HOOK_TOOL_NAMES = frozenset(
+-    {"todo", "session_search", "memory", "clarify", "read_terminal", "delegate_task"}
++    {"todo", "session_search", "memory", "clarify", "read_terminal", "delegate_task", "routine_worker"}
+ )
+ 
+ 
+@@ -1904,6 +1904,10 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
+     elif function_name == "delegate_task":
+         def _execute(next_args: dict) -> Any:
+             return _finish_agent_tool(agent._dispatch_delegate_task(next_args), next_args)
++    elif function_name == "routine_worker":
++        def _execute(next_args: dict) -> Any:
++            from tools.routine_worker import build_routine_delegate_args
++            return _finish_agent_tool(agent._dispatch_delegate_task(build_routine_delegate_args(next_args)), next_args)
+     else:
+         def _execute(next_args: dict) -> Any:
+             return _ra().handle_function_call(
+diff --git a/agent/tool_executor.py b/agent/tool_executor.py
+index e7ba79db8..b565ab83f 100644
+--- a/agent/tool_executor.py
++++ b/agent/tool_executor.py
+@@ -1136,6 +1136,37 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
+                     spinner.stop(cute_msg)
+                 elif agent._should_emit_quiet_tool_messages():
+                     agent._vprint(f"  {cute_msg}")
++        elif function_name == "routine_worker":
++            spinner = None
++            task_type_preview = (function_args.get("task_type") or "routine")[:30]
++            if agent._should_emit_quiet_tool_messages() and agent._should_start_quiet_spinner():
++                face = random.choice(KawaiiSpinner.get_waiting_faces())
++                spinner = KawaiiSpinner(f"{face} 🧑‍🏭 {task_type_preview} · (/agents to monitor)", spinner_type='dots', print_fn=agent._print_fn)
++                spinner.start()
++            agent._delegate_spinner = spinner
++            _routine_result = None
++            try:
++                def _execute(next_args: dict) -> Any:
++                    from tools.routine_worker import build_routine_delegate_args
++                    delegate_args = build_routine_delegate_args(next_args)
++                    return agent._dispatch_delegate_task(delegate_args)
++                function_result, function_args = _run_agent_tool_execution_middleware(
++                    agent,
++                    function_name=function_name,
++                    function_args=function_args,
++                    effective_task_id=effective_task_id,
++                    tool_call_id=getattr(tool_call, "id", "") or "",
++                    execute=_execute,
++                )
++                _routine_result = function_result
++            finally:
++                agent._delegate_spinner = None
++                tool_duration = time.time() - tool_start_time
++                cute_msg = _get_cute_tool_message_impl('routine_worker', function_args, tool_duration, result=_routine_result)
++                if spinner:
++                    spinner.stop(cute_msg)
++                elif agent._should_emit_quiet_tool_messages():
++                    agent._vprint(f"  {cute_msg}")
+         elif agent._context_engine_tool_names and function_name in agent._context_engine_tool_names:
+             # Context engine tools (lcm_grep, lcm_describe, lcm_expand, etc.)
+             spinner = None
+diff --git a/tests/tools/test_routine_worker.py b/tests/tools/test_routine_worker.py
+new file mode 100644
+index 000000000..4e5d50d6e
+--- /dev/null
++++ b/tests/tools/test_routine_worker.py
+@@ -0,0 +1,47 @@
++from __future__ import annotations
++
++from tools.routine_worker import build_routine_delegate_args
++from toolsets import resolve_toolset
++import model_tools
++
++
++def test_marketplace_preset_splits_into_source_workers():
++    delegate_args = build_routine_delegate_args({
++        "task_type": "marketplace_research",
++        "objective": "найти белую обувницу шириной до 55 см и глубиной от 30 см",
++        "context": "Вернуть shortlist, не покупать и не логиниться.",
++    })
++
++    tasks = delegate_args["tasks"]
++    assert len(tasks) == 3
++    assert delegate_args["background"] is False
++    goals = [task["goal"] for task in tasks]
++    assert any("Yandex Market worker" in goal for goal in goals)
++    assert any("Wildberries worker" in goal for goal in goals)
++    assert any("Search/Ozon fallback worker" in goal for goal in goals)
++    assert all(task["role"] == "leaf" for task in tasks)
++    assert all(task["toolsets"] == ["web", "browser"] for task in tasks)
++    assert all("Do not purchase, login, or modify external state" in task["context"] for task in tasks)
++
++
++def test_kb_triage_preset_uses_file_and_session_search_tools():
++    delegate_args = build_routine_delegate_args({
++        "task_type": "kb_triage",
++        "objective": "сверить Cockpit и roadmap",
++        "background": True,
++    })
++
++    assert delegate_args["goal"].startswith("KB/source-of-truth triage worker")
++    assert delegate_args["toolsets"] == ["file", "session_search"]
++    assert delegate_args["background"] is True
++    assert "local KB only" in delegate_args["context"]
++
++
++def test_routine_worker_is_in_delegation_toolset_and_core_schema():
++    assert "routine_worker" in resolve_toolset("delegation")
++    assert "routine_worker" in resolve_toolset("hermes-cli")
++
++    definitions = model_tools.get_tool_definitions(enabled_toolsets=["delegation"])
++    names = {definition["function"]["name"] for definition in definitions}
++    assert "delegate_task" in names
++    assert "routine_worker" in names
+diff --git a/tools/routine_worker.py b/tools/routine_worker.py
+new file mode 100644
+index 000000000..cf02bad85
+--- /dev/null
++++ b/tools/routine_worker.py
+@@ -0,0 +1,174 @@
++"""Native routine-worker tool.
++
++This tool gives the main agent an explicit, low-friction route for broad but
++routine subtasks that should run on the configured delegation worker model
++instead of consuming the main session model for every reasoning step.
++"""
++
++from __future__ import annotations
++
++import json
++from typing import Any
++
++from tools.registry import registry, tool_error
++
++
++ROUTINE_WORKER_SCHEMA = {
++    "name": "routine_worker",
++    "description": (
++        "Dispatch routine, source-specific work to configured worker subagents "
++        "(delegation.provider/model, e.g. gpt-5.4-mini) while the main agent "
++        "stays as orchestrator. Use this by default for broad marketplace, "
++        "travel, web research, and KB triage tasks where independent sources "
++        "can be checked in parallel. The tool wraps delegate_task with safe "
++        "presets; it does not perform external writes or purchases."
++    ),
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "task_type": {
++                "type": "string",
++                "enum": ["marketplace_research", "web_research", "kb_triage", "single"],
++                "description": (
++                    "Preset routing kind. marketplace_research splits into "
++                    "Yandex Market, Wildberries, and search/Ozon visual fallback workers."
++                ),
++            },
++            "objective": {
++                "type": "string",
++                "description": "Concrete task objective, including constraints and desired output.",
++            },
++            "context": {
++                "type": "string",
++                "description": "Relevant background, constraints, user preferences, and safety boundaries.",
++            },
++            "sources": {
++                "type": "array",
++                "items": {"type": "string"},
++                "description": (
++                    "Optional source names/URLs/marketplaces to target. For marketplace_research, "
++                    "defaults to Yandex Market, Wildberries, and search/Ozon fallback."
++                ),
++            },
++            "toolsets": {
++                "type": "array",
++                "items": {"type": "string"},
++                "description": "Optional worker toolsets override. Defaults depend on task_type.",
++            },
++            "background": {
++                "type": "boolean",
++                "description": "Run a single worker in background. Batch presets ignore this and run synchronously.",
++            },
++        },
++        "required": ["task_type", "objective"],
++    },
++}
++
++
++_MARKETPLACE_DEFAULT_SOURCES = ["Yandex Market", "Wildberries", "Search/Ozon visual fallback"]
++
++
++def _compact(value: Any) -> str:
++    return str(value or "").strip()
++
++
++def _worker_context(base_context: str, extra: str) -> str:
++    parts = [
++        "You are a routine worker spawned by the main Архивариус agent.",
++        "Return a compact evidence-backed summary. Do not purchase, login, or modify external state.",
++        "Label uncertain facts explicitly; distinguish verified fields from search snippets.",
++    ]
++    if base_context:
++        parts.append(f"Parent context: {base_context}")
++    if extra:
++        parts.append(extra)
++    return "\n".join(parts)
++
++
++def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
++    """Translate routine_worker args into delegate_task-compatible args."""
++    task_type = _compact(args.get("task_type")) or "single"
++    objective = _compact(args.get("objective"))
++    context = _compact(args.get("context"))
++    sources = [str(s).strip() for s in (args.get("sources") or []) if str(s).strip()]
++    toolsets = args.get("toolsets")
++
++    if not objective:
++        raise ValueError("routine_worker requires a non-empty objective")
++
++    if task_type == "marketplace_research":
++        selected = sources or _MARKETPLACE_DEFAULT_SOURCES
++        tasks = []
++        for source in selected[:3]:
++            source_l = source.lower()
++            if "wild" in source_l or "wb" == source_l:
++                goal = f"Wildberries worker: {objective}"
++                extra = "Focus on Wildberries. Confirm dimensions, color/type, stock, price, delivery, and URL when possible."
++                worker_toolsets = toolsets or ["web", "browser"]
++            elif "yandex" in source_l or "market" in source_l or "янд" in source_l:
++                goal = f"Yandex Market worker: {objective}"
++                extra = "Focus on Yandex Market. Confirm product-card specs, availability, price, seller, and URL when possible."
++                worker_toolsets = toolsets or ["web", "browser"]
++            else:
++                goal = f"Search/Ozon fallback worker: {objective}"
++                extra = "Use web search and browser/visual fallback for Ozon or independent stores. Mark visual-only evidence clearly."
++                worker_toolsets = toolsets or ["web", "browser"]
++            tasks.append({
++                "goal": goal,
++                "context": _worker_context(context, extra),
++                "toolsets": worker_toolsets,
++                "role": "leaf",
++            })
++        return {"tasks": tasks, "background": False}
++
++    if task_type == "web_research":
++        selected = sources or ["official/source docs", "web search results", "secondary verification"]
++        tasks = [
++            {
++                "goal": f"Research {source}: {objective}",
++                "context": _worker_context(context, f"Focus only on source lane: {source}. Return URLs and quoted/grounded findings."),
++                "toolsets": toolsets or ["web"],
++                "role": "leaf",
++            }
++            for source in selected[:3]
++        ]
++        return {"tasks": tasks, "background": False}
++
++    if task_type == "kb_triage":
++        return {
++            "goal": f"KB/source-of-truth triage worker: {objective}",
++            "context": _worker_context(
++                context,
++                "Inspect the local KB only. Prefer search_files/read_file/session_search. Do not make external or infrastructure changes.",
++            ),
++            "toolsets": toolsets or ["file", "session_search"],
++            "role": "leaf",
++            "background": bool(args.get("background", False)),
++        }
++
++    return {
++        "goal": f"Routine worker: {objective}",
++        "context": _worker_context(context, "Keep the result concise and evidence-backed."),
++        "toolsets": toolsets or ["web", "file"],
++        "role": "leaf",
++        "background": bool(args.get("background", False)),
++    }
++
++
++def routine_worker(**_: Any) -> str:
++    """Registry fallback.
++
++    The real execution path is agent-owned because it must call
++    ``agent._dispatch_delegate_task`` with the parent agent context. If this
++    function is reached, the tool was not routed through the agent runtime.
++    """
++    return tool_error("routine_worker requires agent runtime context; use from an active agent session.")
++
++
++registry.register(
++    name="routine_worker",
++    toolset="delegation",
++    schema=ROUTINE_WORKER_SCHEMA,
++    handler=lambda args, **kw: routine_worker(**args),
++    emoji="🧑‍🏭",
++)
+diff --git a/toolsets.py b/toolsets.py
+index f33be147e..ef496ada9 100644
+--- a/toolsets.py
++++ b/toolsets.py
+@@ -56,7 +56,7 @@ _HERMES_CORE_TOOLS = [
+     # Clarifying questions
+     "clarify",
+     # Code execution + delegation
+-    "execute_code", "delegate_task",
++    "execute_code", "delegate_task", "routine_worker",
+     # Cronjob management
+     "cronjob",
+     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
+@@ -236,8 +236,8 @@ TOOLSETS = {
+     },
+     
+     "delegation": {
+-        "description": "Spawn subagents with isolated context for complex subtasks",
+-        "tools": ["delegate_task"],
++        "description": "Spawn subagents with isolated context for complex or routine subtasks",
++        "tools": ["delegate_task", "routine_worker"],
+         "includes": []
+     },
+ 
+-- 
+2.34.1
+
