@@ -92,6 +92,8 @@ routine_worker:
 
 The provider names must already exist in Hermes provider configuration. Use `custom:<name>` for custom providers, not bare `custom`.
 
+For a fuller restoreable provider/routing example, see `README.md` in this skill directory. It includes generic, Neurogate-style, and built-in provider layouts.
+
 ## Procedure
 
 1. Restate the user's goal as concrete filters and constraints.
