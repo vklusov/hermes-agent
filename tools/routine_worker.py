@@ -8,6 +8,7 @@ consuming the main session model for every reasoning step.
 from __future__ import annotations
 
 from typing import Any
+import re
 
 from tools.registry import registry, tool_error
 
@@ -98,6 +99,109 @@ def _worker_context(base_context: str, extra: str) -> str:
     if extra:
         parts.append(extra)
     return "\n".join(parts)
+
+
+_GPT55_BYPASS_RE = re.compile(
+    r"(gpt\s*-?\s*5[\.,]?5|gpt55|гпт\s*-?\s*5[\.,]?5|"
+    r"основн(?:ой|ая|ую)\s+модел|main\s+model|"
+    r"без\s+(?:worker|воркер|деш[её]в|делегир)|"
+    r"не\s+(?:используй|надо|нужно)?\s*(?:worker|воркер|делегир)|"
+    r"на\s+дорог(?:ой|ую)\s+модел)",
+    re.IGNORECASE,
+)
+
+
+def _latest_user_text(messages: list[dict[str, Any]] | None) -> str:
+    if not messages:
+        return ""
+    for msg in reversed(messages):
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            chunks: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content")
+                    if isinstance(text, str):
+                        chunks.append(text)
+                elif isinstance(item, str):
+                    chunks.append(item)
+            return "\n".join(chunks)
+    return ""
+
+
+def _web_tool_subject(function_name: str, function_args: dict[str, Any]) -> tuple[str, list[str]]:
+    if function_name == "web_search":
+        query = _compact(function_args.get("query") or function_args.get("q"))
+        return query or "web search", [query] if query else []
+    if function_name == "web_extract":
+        raw_urls = function_args.get("urls") or function_args.get("url") or []
+        if isinstance(raw_urls, str):
+            urls = [raw_urls]
+        else:
+            urls = [str(url).strip() for url in raw_urls if str(url).strip()]
+        subject = ", ".join(urls[:3]) if urls else "web extraction"
+        return subject, urls[:3]
+    return function_name, []
+
+
+def should_autoroute_web_research(
+    function_name: str,
+    function_args: dict[str, Any],
+    *,
+    messages: list[dict[str, Any]] | None = None,
+    agent: Any = None,
+) -> bool:
+    """Return True when a main-agent web call should become routine_worker.
+
+    This is deliberately conservative about recursion: child/delegated agents do
+    their own source collection directly. The parent can still opt into the main
+    model by explicitly asking for GPT-5.5/main/no-worker search.
+    """
+    if function_name not in {"web_search", "web_extract"}:
+        return False
+    if not isinstance(function_args, dict) or function_args.get("routine_worker_bypass"):
+        return False
+    if getattr(agent, "_delegate_depth", 0) > 0:
+        return False
+    valid_tool_names = getattr(agent, "valid_tool_names", None)
+    if valid_tool_names is not None and "routine_worker" not in valid_tool_names:
+        return False
+    user_text = _latest_user_text(messages)
+    if _GPT55_BYPASS_RE.search(user_text):
+        return False
+    subject, _sources = _web_tool_subject(function_name, function_args)
+    return bool(subject)
+
+
+def build_web_research_autoroute_args(
+    function_name: str,
+    function_args: dict[str, Any],
+    *,
+    messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build routine_worker args for an intercepted web_search/web_extract."""
+    subject, sources = _web_tool_subject(function_name, function_args)
+    user_text = _latest_user_text(messages)
+    objective = (
+        f"Research the user's request using web sources. Initial {function_name} target: {subject}."
+    )
+    context_parts = [
+        "Auto-routed from a direct web tool call to routine_worker so routine web research runs on the configured cheaper worker model by default.",
+        "Return a concise evidence-backed summary with source URLs and uncertainty labels.",
+        "Do not login, purchase, send messages, or modify external state.",
+    ]
+    if user_text:
+        context_parts.append(f"Original user request: {user_text}")
+    return {
+        "task_type": "web_research",
+        "objective": objective,
+        "context": "\n".join(context_parts),
+        "sources": sources or [subject],
+    }
 
 
 def _load_routine_worker_config() -> dict[str, Any]:

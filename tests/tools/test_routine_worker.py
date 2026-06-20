@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from tools.routine_worker import (
     build_routine_delegate_args,
+    build_web_research_autoroute_args,
+    should_autoroute_web_research,
     resolve_routine_route,
 )
 from toolsets import resolve_toolset
@@ -86,3 +90,60 @@ def test_routine_worker_is_in_delegation_toolset_and_core_schema():
     names = {definition["function"]["name"] for definition in definitions}
     assert "delegate_task" in names
     assert "routine_worker" in names
+
+
+def test_autoroute_web_search_defaults_to_routine_worker():
+    agent = SimpleNamespace(_delegate_depth=0, valid_tool_names={"routine_worker", "web_search"})
+    messages = [{"role": "user", "content": "Поищи в интернете как подключить бота к Max"}]
+
+    assert should_autoroute_web_research(
+        "web_search",
+        {"query": "MAX messenger bot API"},
+        messages=messages,
+        agent=agent,
+    )
+
+    args = build_web_research_autoroute_args(
+        "web_search",
+        {"query": "MAX messenger bot API"},
+        messages=messages,
+    )
+    assert args["task_type"] == "web_research"
+    assert "MAX messenger bot API" in args["objective"]
+    assert "Auto-routed" in args["context"]
+
+
+def test_autoroute_web_search_respects_explicit_gpt55_request():
+    agent = SimpleNamespace(_delegate_depth=0, valid_tool_names={"routine_worker", "web_search"})
+    messages = [{"role": "user", "content": "Поищи это именно на gpt-5.5, без дешёвой модели"}]
+
+    assert not should_autoroute_web_research(
+        "web_search",
+        {"query": "MAX messenger bot API"},
+        messages=messages,
+        agent=agent,
+    )
+
+
+def test_autoroute_web_search_skips_subagents_to_avoid_recursion():
+    agent = SimpleNamespace(_delegate_depth=1, valid_tool_names={"routine_worker", "web_search"})
+    messages = [{"role": "user", "content": "Поищи в интернете"}]
+
+    assert not should_autoroute_web_research(
+        "web_search",
+        {"query": "MAX messenger bot API"},
+        messages=messages,
+        agent=agent,
+    )
+
+
+def test_autoroute_web_extract_builds_objective_from_urls():
+    args = build_web_research_autoroute_args(
+        "web_extract",
+        {"urls": ["https://dev.max.ru/docs-api", "https://dev.max.ru/docs/chatbots/bots-create"]},
+        messages=[{"role": "user", "content": "Разберись по MAX"}],
+    )
+
+    assert args["task_type"] == "web_research"
+    assert "https://dev.max.ru/docs-api" in args["objective"]
+    assert args["sources"] == ["https://dev.max.ru/docs-api", "https://dev.max.ru/docs/chatbots/bots-create"]

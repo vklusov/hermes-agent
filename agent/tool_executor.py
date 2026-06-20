@@ -1939,7 +1939,48 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
 
         tool_start_time = time.time()
 
-        if function_name == "todo":
+        _routine_args = None
+        if function_name in {"web_search", "web_extract"}:
+            try:
+                from tools.routine_worker import (
+                    build_web_research_autoroute_args,
+                    should_autoroute_web_research,
+                )
+
+                if should_autoroute_web_research(
+                    function_name,
+                    function_args,
+                    messages=messages,
+                    agent=agent,
+                ):
+                    _routine_args = build_web_research_autoroute_args(
+                        function_name,
+                        function_args,
+                        messages=messages,
+                    )
+            except Exception:
+                _routine_args = None
+
+        if _routine_args is not None:
+            def _execute(next_args: dict) -> Any:
+                from tools.routine_worker import build_routine_delegate_args
+
+                return agent._dispatch_delegate_task(
+                    build_routine_delegate_args(next_args)
+                )
+
+            function_result, function_args, middleware_trace, _execution_blocked, _execution_dispatched = _managed_values(_run_agent_tool_execution_middleware(
+                agent,
+                function_name="routine_worker",
+                function_args=_routine_args,
+                effective_task_id=effective_task_id,
+                tool_call_id=getattr(tool_call, "id", "") or "",
+                execute=_execute,
+                scope_block=_ts_scope_block,
+                display_index=i,
+            ))
+            tool_duration = time.time() - tool_start_time
+        elif function_name == "todo":
             def _execute(next_args: dict) -> Any:
                 from tools.todo_tool import todo_tool as _todo_tool
                 return _todo_tool(

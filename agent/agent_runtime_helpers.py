@@ -3059,7 +3059,41 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
             pass
         return result
 
-    if function_name == "todo":
+    if function_name in {"web_search", "web_extract"}:
+        try:
+            from tools.routine_worker import (
+                build_routine_delegate_args,
+                build_web_research_autoroute_args,
+                should_autoroute_web_research,
+            )
+            if should_autoroute_web_research(
+                function_name,
+                function_args,
+                messages=messages,
+                agent=agent,
+            ):
+                _routine_args = build_web_research_autoroute_args(
+                    function_name,
+                    function_args,
+                    messages=messages,
+                )
+                def _execute(next_args: dict) -> Any:
+                    return _finish_agent_tool(
+                        agent._dispatch_delegate_task(build_routine_delegate_args(next_args)),
+                        next_args,
+                    )
+                function_name = "routine_worker"
+                function_args = _routine_args
+            else:
+                _execute = None
+        except Exception:
+            _execute = None
+    else:
+        _execute = None
+
+    if _execute is not None:
+        pass
+    elif function_name == "todo":
         def _execute(next_args: dict) -> Any:
             from tools.todo_tool import todo_tool as _todo_tool
             return _finish_agent_tool(
