@@ -65,7 +65,7 @@ Each route may contain:
 provider: custom:provider-name   # or a built-in Hermes provider id
 model: model-name
 base_url: https://override.example/v1   # optional, usually prefer custom_providers
-api_key: sk-...                         # optional, avoid committing this
+api_key: "<API_KEY>"                    # optional, avoid committing this
 api_mode: anthropic_messages            # optional, usually belongs on provider
 ```
 
