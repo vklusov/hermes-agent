@@ -1384,6 +1384,44 @@ class TestDispatchDelegateTask(unittest.TestCase):
         self.assertNotIn("acp_command", captured["tasks"][0])
         self.assertNotIn("acp_args", captured["tasks"][0])
 
+    @patch("tools.delegate_tool._load_config", return_value={})
+    @patch("tools.delegate_tool._resolve_delegation_credentials")
+    def test_provider_model_overrides_forwarded(self, mock_creds, mock_cfg):
+        """Per-call provider/model overrides reach delegate_task via the helper."""
+        mock_creds.return_value = {
+            "provider": "custom:test", "base_url": "https://example.test/v1",
+            "api_key": "sk-test", "api_mode": "chat_completions", "model": "test-model",
+        }
+        parent = _make_mock_parent(depth=0)
+        with patch("tools.delegate_tool._build_child_agent") as mock_build:
+            mock_child = MagicMock()
+            mock_child.run_conversation.return_value = {
+                "final_response": "done", "completed": True,
+                "api_calls": 1, "messages": [],
+            }
+            mock_child._delegate_saved_tool_names = []
+            mock_child._credential_pool = None
+            mock_child.session_prompt_tokens = 0
+            mock_child.session_completion_tokens = 0
+            mock_child.model = "test-model"
+            mock_build.return_value = mock_child
+
+            delegate_task(
+                goal="test",
+                provider="custom:test",
+                model="test-model",
+                base_url="https://example.test/v1",
+                api_key="sk-test",
+                api_mode="chat_completions",
+                parent_agent=parent,
+            )
+            _, kwargs = mock_build.call_args
+            self.assertEqual(kwargs["model"], "test-model")
+            self.assertEqual(kwargs["override_provider"], "custom:test")
+            self.assertEqual(kwargs["override_base_url"], "https://example.test/v1")
+            self.assertEqual(kwargs["override_api_key"], "sk-test")
+            self.assertEqual(kwargs["override_api_mode"], "chat_completions")
+
 class TestDelegateEventEnum(unittest.TestCase):
     """Tests for DelegateEvent enum and back-compat aliases."""
 
