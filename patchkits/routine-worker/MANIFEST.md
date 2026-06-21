@@ -21,6 +21,7 @@ origin/main @ 1a0ef1311c8e65b50ccaad46754c97a089122d81
 0004 docs: add routine worker skill
 0005 docs: add routine worker config examples
 0006 docs: avoid key-like config placeholder
+0007 feat: autoroute web research to routine workers
 ```
 
 ## Files changed by patch application

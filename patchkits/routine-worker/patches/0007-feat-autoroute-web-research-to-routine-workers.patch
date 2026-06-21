@@ -1,0 +1,343 @@
+From f111254c6c8829451f99e5da2e7b35477ccfc641 Mon Sep 17 00:00:00 2001
+From: Archivarius <archivarius@local>
+Date: Sat, 20 Jun 2026 13:02:17 +0000
+Subject: [PATCH 7/7] feat: autoroute web research to routine workers
+
+---
+ agent/agent_runtime_helpers.py     |  36 +++++++++-
+ agent/tool_executor.py             |  70 +++++++++++++++++++
+ tests/tools/test_routine_worker.py |  61 +++++++++++++++++
+ tools/routine_worker.py            | 104 +++++++++++++++++++++++++++++
+ 4 files changed, 270 insertions(+), 1 deletion(-)
+
+diff --git a/agent/agent_runtime_helpers.py b/agent/agent_runtime_helpers.py
+index e787935dd..bcce52b9b 100644
+--- a/agent/agent_runtime_helpers.py
++++ b/agent/agent_runtime_helpers.py
+@@ -1804,7 +1804,41 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
+             pass
+         return result
+ 
+-    if function_name == "todo":
++    if function_name in {"web_search", "web_extract"}:
++        try:
++            from tools.routine_worker import (
++                build_routine_delegate_args,
++                build_web_research_autoroute_args,
++                should_autoroute_web_research,
++            )
++            if should_autoroute_web_research(
++                function_name,
++                function_args,
++                messages=messages,
++                agent=agent,
++            ):
++                _routine_args = build_web_research_autoroute_args(
++                    function_name,
++                    function_args,
++                    messages=messages,
++                )
++                def _execute(next_args: dict) -> Any:
++                    return _finish_agent_tool(
++                        agent._dispatch_delegate_task(build_routine_delegate_args(next_args)),
++                        next_args,
++                    )
++                function_name = "routine_worker"
++                function_args = _routine_args
++            else:
++                _execute = None
++        except Exception:
++            _execute = None
++    else:
++        _execute = None
++
++    if _execute is not None:
++        pass
++    elif function_name == "todo":
+         def _execute(next_args: dict) -> Any:
+             from tools.todo_tool import todo_tool as _todo_tool
+             return _finish_agent_tool(
+diff --git a/agent/tool_executor.py b/agent/tool_executor.py
+index b565ab83f..cc18b1783 100644
+--- a/agent/tool_executor.py
++++ b/agent/tool_executor.py
+@@ -961,6 +961,76 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
+                 error_message=getattr(_guardrail_block_decision, "message", None) or "Tool blocked by guardrail policy",
+                 middleware_trace=list(middleware_trace),
+             )
++        elif function_name in {"web_search", "web_extract"}:
++            _routine_args = None
++            try:
++                from tools.routine_worker import (
++                    build_routine_delegate_args,
++                    build_web_research_autoroute_args,
++                    should_autoroute_web_research,
++                )
++                _should_autoroute = should_autoroute_web_research(
++                    function_name,
++                    function_args,
++                    messages=messages,
++                    agent=agent,
++                )
++                if _should_autoroute:
++                    _routine_args = build_web_research_autoroute_args(
++                        function_name,
++                        function_args,
++                        messages=messages,
++                    )
++            except Exception:
++                _should_autoroute = False
++
++            if _should_autoroute and _routine_args is not None:
++                def _execute(next_args: dict) -> Any:
++                    delegate_args = build_routine_delegate_args(next_args)
++                    return agent._dispatch_delegate_task(delegate_args)
++                function_result, function_args = _run_agent_tool_execution_middleware(
++                    agent,
++                    function_name="routine_worker",
++                    function_args=_routine_args,
++                    effective_task_id=effective_task_id,
++                    tool_call_id=getattr(tool_call, "id", "") or "",
++                    execute=_execute,
++                )
++                tool_duration = time.time() - tool_start_time
++            else:
++                try:
++                    function_result = _ra().handle_function_call(
++                        function_name, function_args, effective_task_id,
++                        tool_call_id=tool_call.id,
++                        session_id=agent.session_id or "",
++                        turn_id=getattr(agent, "_current_turn_id", "") or "",
++                        api_request_id=getattr(agent, "_current_api_request_id", "") or "",
++                        enabled_tools=list(agent.valid_tool_names) if agent.valid_tool_names else None,
++                        skip_pre_tool_call_hook=True,
++                        skip_tool_request_middleware=True,
++                        enabled_toolsets=getattr(agent, "enabled_toolsets", None),
++                        disabled_toolsets=getattr(agent, "disabled_toolsets", None),
++                        tool_request_middleware_trace=list(middleware_trace),
++                    )
++                except KeyboardInterrupt:
++                    _emit_cancelled_terminal_post_tool_call(
++                        agent,
++                        function_name=function_name,
++                        function_args=function_args,
++                        effective_task_id=effective_task_id,
++                        tool_call_id=getattr(tool_call, "id", "") or "",
++                        start_time=tool_start_time,
++                        middleware_trace=list(middleware_trace),
++                    )
++                    try:
++                        agent.interrupt("keyboard interrupt")
++                    except Exception:
++                        pass
++                    raise
++                except Exception as tool_error:
++                    function_result = f"Error executing tool '{function_name}': {tool_error}"
++                    logger.error("handle_function_call raised for %s: %s", function_name, tool_error, exc_info=True)
++                tool_duration = time.time() - tool_start_time
+         elif function_name == "todo":
+             def _execute(next_args: dict) -> Any:
+                 from tools.todo_tool import todo_tool as _todo_tool
+diff --git a/tests/tools/test_routine_worker.py b/tests/tools/test_routine_worker.py
+index 6620ad2ef..fe06fa7d6 100644
+--- a/tests/tools/test_routine_worker.py
++++ b/tests/tools/test_routine_worker.py
+@@ -2,8 +2,12 @@
+ 
+ from __future__ import annotations
+ 
++from types import SimpleNamespace
++
+ from tools.routine_worker import (
+     build_routine_delegate_args,
++    build_web_research_autoroute_args,
++    should_autoroute_web_research,
+     resolve_routine_route,
+ )
+ from toolsets import resolve_toolset
+@@ -86,3 +90,60 @@ def test_routine_worker_is_in_delegation_toolset_and_core_schema():
+     names = {definition["function"]["name"] for definition in definitions}
+     assert "delegate_task" in names
+     assert "routine_worker" in names
++
++
++def test_autoroute_web_search_defaults_to_routine_worker():
++    agent = SimpleNamespace(_delegate_depth=0, valid_tool_names={"routine_worker", "web_search"})
++    messages = [{"role": "user", "content": "Поищи в интернете как подключить бота к Max"}]
++
++    assert should_autoroute_web_research(
++        "web_search",
++        {"query": "MAX messenger bot API"},
++        messages=messages,
++        agent=agent,
++    )
++
++    args = build_web_research_autoroute_args(
++        "web_search",
++        {"query": "MAX messenger bot API"},
++        messages=messages,
++    )
++    assert args["task_type"] == "web_research"
++    assert "MAX messenger bot API" in args["objective"]
++    assert "Auto-routed" in args["context"]
++
++
++def test_autoroute_web_search_respects_explicit_gpt55_request():
++    agent = SimpleNamespace(_delegate_depth=0, valid_tool_names={"routine_worker", "web_search"})
++    messages = [{"role": "user", "content": "Поищи это именно на gpt-5.5, без дешёвой модели"}]
++
++    assert not should_autoroute_web_research(
++        "web_search",
++        {"query": "MAX messenger bot API"},
++        messages=messages,
++        agent=agent,
++    )
++
++
++def test_autoroute_web_search_skips_subagents_to_avoid_recursion():
++    agent = SimpleNamespace(_delegate_depth=1, valid_tool_names={"routine_worker", "web_search"})
++    messages = [{"role": "user", "content": "Поищи в интернете"}]
++
++    assert not should_autoroute_web_research(
++        "web_search",
++        {"query": "MAX messenger bot API"},
++        messages=messages,
++        agent=agent,
++    )
++
++
++def test_autoroute_web_extract_builds_objective_from_urls():
++    args = build_web_research_autoroute_args(
++        "web_extract",
++        {"urls": ["https://dev.max.ru/docs-api", "https://dev.max.ru/docs/chatbots/bots-create"]},
++        messages=[{"role": "user", "content": "Разберись по MAX"}],
++    )
++
++    assert args["task_type"] == "web_research"
++    assert "https://dev.max.ru/docs-api" in args["objective"]
++    assert args["sources"] == ["https://dev.max.ru/docs-api", "https://dev.max.ru/docs/chatbots/bots-create"]
+diff --git a/tools/routine_worker.py b/tools/routine_worker.py
+index 7b37807e9..0c6adbcda 100644
+--- a/tools/routine_worker.py
++++ b/tools/routine_worker.py
+@@ -8,6 +8,7 @@ consuming the main session model for every reasoning step.
+ from __future__ import annotations
+ 
+ from typing import Any
++import re
+ 
+ from tools.registry import registry, tool_error
+ 
+@@ -100,6 +101,109 @@ def _worker_context(base_context: str, extra: str) -> str:
+     return "\n".join(parts)
+ 
+ 
++_GPT55_BYPASS_RE = re.compile(
++    r"(gpt\s*-?\s*5[\.,]?5|gpt55|гпт\s*-?\s*5[\.,]?5|"
++    r"основн(?:ой|ая|ую)\s+модел|main\s+model|"
++    r"без\s+(?:worker|воркер|деш[её]в|делегир)|"
++    r"не\s+(?:используй|надо|нужно)?\s*(?:worker|воркер|делегир)|"
++    r"на\s+дорог(?:ой|ую)\s+модел)",
++    re.IGNORECASE,
++)
++
++
++def _latest_user_text(messages: list[dict[str, Any]] | None) -> str:
++    if not messages:
++        return ""
++    for msg in reversed(messages):
++        if not isinstance(msg, dict) or msg.get("role") != "user":
++            continue
++        content = msg.get("content", "")
++        if isinstance(content, str):
++            return content
++        if isinstance(content, list):
++            chunks: list[str] = []
++            for item in content:
++                if isinstance(item, dict):
++                    text = item.get("text") or item.get("content")
++                    if isinstance(text, str):
++                        chunks.append(text)
++                elif isinstance(item, str):
++                    chunks.append(item)
++            return "\n".join(chunks)
++    return ""
++
++
++def _web_tool_subject(function_name: str, function_args: dict[str, Any]) -> tuple[str, list[str]]:
++    if function_name == "web_search":
++        query = _compact(function_args.get("query") or function_args.get("q"))
++        return query or "web search", [query] if query else []
++    if function_name == "web_extract":
++        raw_urls = function_args.get("urls") or function_args.get("url") or []
++        if isinstance(raw_urls, str):
++            urls = [raw_urls]
++        else:
++            urls = [str(url).strip() for url in raw_urls if str(url).strip()]
++        subject = ", ".join(urls[:3]) if urls else "web extraction"
++        return subject, urls[:3]
++    return function_name, []
++
++
++def should_autoroute_web_research(
++    function_name: str,
++    function_args: dict[str, Any],
++    *,
++    messages: list[dict[str, Any]] | None = None,
++    agent: Any = None,
++) -> bool:
++    """Return True when a main-agent web call should become routine_worker.
++
++    This is deliberately conservative about recursion: child/delegated agents do
++    their own source collection directly. The parent can still opt into the main
++    model by explicitly asking for GPT-5.5/main/no-worker search.
++    """
++    if function_name not in {"web_search", "web_extract"}:
++        return False
++    if not isinstance(function_args, dict) or function_args.get("routine_worker_bypass"):
++        return False
++    if getattr(agent, "_delegate_depth", 0) > 0:
++        return False
++    valid_tool_names = getattr(agent, "valid_tool_names", None)
++    if valid_tool_names is not None and "routine_worker" not in valid_tool_names:
++        return False
++    user_text = _latest_user_text(messages)
++    if _GPT55_BYPASS_RE.search(user_text):
++        return False
++    subject, _sources = _web_tool_subject(function_name, function_args)
++    return bool(subject)
++
++
++def build_web_research_autoroute_args(
++    function_name: str,
++    function_args: dict[str, Any],
++    *,
++    messages: list[dict[str, Any]] | None = None,
++) -> dict[str, Any]:
++    """Build routine_worker args for an intercepted web_search/web_extract."""
++    subject, sources = _web_tool_subject(function_name, function_args)
++    user_text = _latest_user_text(messages)
++    objective = (
++        f"Research the user's request using web sources. Initial {function_name} target: {subject}."
++    )
++    context_parts = [
++        "Auto-routed from a direct web tool call to routine_worker so routine web research runs on the configured cheaper worker model by default.",
++        "Return a concise evidence-backed summary with source URLs and uncertainty labels.",
++        "Do not login, purchase, send messages, or modify external state.",
++    ]
++    if user_text:
++        context_parts.append(f"Original user request: {user_text}")
++    return {
++        "task_type": "web_research",
++        "objective": objective,
++        "context": "\n".join(context_parts),
++        "sources": sources or [subject],
++    }
++
++
+ def _load_routine_worker_config() -> dict[str, Any]:
+     try:
+         from hermes_cli.config import load_config
+-- 
+2.34.1
+

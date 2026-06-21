@@ -7,6 +7,8 @@ Portable patch bundle for adding the native `routine_worker` tool to Hermes Agen
 - Native `routine_worker` tool for dispatching routine work to source-specific workers.
 - Presets for marketplace research, web research, cheap flash checks, KB triage, and single-worker tasks.
 - Per-task provider/model routing via `config.yaml` section `routine_worker`.
+- Auto-routing of direct main-agent `web_search` / `web_extract` calls to routine workers by default.
+- Explicit GPT-5.5/main-model bypass phrases such as `gpt-5.5`, `main model`, `без worker`, or `без дешёвой модели`.
 - Forwarding of `provider`, `model`, `base_url`, `api_key`, and `api_mode` overrides into delegated child agents.
 - In-repo `routine-worker` skill and config examples.
 

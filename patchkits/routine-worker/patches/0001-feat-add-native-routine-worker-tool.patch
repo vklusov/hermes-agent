@@ -1,7 +1,7 @@
 From baed27a141419c0c3ae0d3e28397cd87017a30c3 Mon Sep 17 00:00:00 2001
 From: Archivarius <archivarius@local>
 Date: Sat, 20 Jun 2026 08:39:37 +0000
-Subject: [PATCH 1/6] feat: add native routine worker tool
+Subject: [PATCH 1/7] feat: add native routine worker tool
 
 ---
  agent/agent_runtime_helpers.py     |   6 +-
