@@ -5052,6 +5052,7 @@ class AIAgent:
                 proxy=_proxy,
                 mounts=_mounts or None,
                 verify=verify,
+                headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"},
             )
         except Exception:
             return None
@@ -8191,8 +8192,6 @@ class AIAgent:
             context=function_args.get("context"),
             tasks=_strip_model_hidden_task_fields(function_args.get("tasks")),
             max_iterations=function_args.get("max_iterations"),
-<<<<<<< HEAD
-=======
             provider=function_args.get("provider"),
             model=function_args.get("model"),
             base_url=function_args.get("base_url"),
@@ -8200,7 +8199,6 @@ class AIAgent:
             api_mode=function_args.get("api_mode"),
             acp_command=function_args.get("acp_command"),
             acp_args=function_args.get("acp_args"),
->>>>>>> eb7631249 (fix: forward routine worker model overrides through agent dispatch)
             role=function_args.get("role"),
             background=(not _is_subagent),
             action=function_args.get("action"),
