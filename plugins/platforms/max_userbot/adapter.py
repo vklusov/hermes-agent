@@ -222,7 +222,7 @@ class MaxUserbotAdapter(BasePlatformAdapter):
             kwargs["password_provider"] = _EnvPasswordProvider()
         return Client(**kwargs)
 
-    async def connect(self) -> bool:
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
         if self._running:
             return True
         try:

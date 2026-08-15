@@ -2684,18 +2684,17 @@ class APIServerAdapter(BasePlatformAdapter):
             runtime_kwargs = _resolve_runtime_agent_kwargs()
         except RuntimeError as exc:
             raise _ProviderAuthResolutionError(str(exc)) from exc
-        model = _resolve_gateway_model()
 
-        # When the primary provider's auth fails (expired token / 429 quota
-        # cap), _resolve_runtime_agent_kwargs() falls through to the fallback
-        # provider chain, whose runtime dict carries its own ``model`` key.
-        # Pop it and let it override the config model, mirroring the native
-        # gateway path (_resolve_session_agent_runtime in run.py). Otherwise
-        # the explicit ``model=model`` below collides with the ``**runtime_kwargs``
-        # spread → "got multiple values for keyword argument 'model'", 500ing
-        # every /v1/chat/completions request while a fallback is active.
+        # A fallback provider can supply its own model. Pop it exactly once so
+        # the explicit model argument cannot collide with **runtime_kwargs.
         runtime_model = runtime_kwargs.pop("model", None)
+        model = _resolve_gateway_model()
         if runtime_model:
+            logger.info(
+                "Runtime provider supplied explicit model override: %s -> %s",
+                model,
+                runtime_model,
+            )
             model = runtime_model
 
         request_reasoning_config = _request_reasoning_config(model_options)

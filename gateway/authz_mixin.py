@@ -619,6 +619,30 @@ class GatewayAuthorizationMixin:
         global_allowlist = _auth_env("GATEWAY_ALLOWED_USERS")
 
         if not platform_allowlist and not group_user_allowlist and not group_chat_allowlist and not global_allowlist:
+            # Some bundled/plugin adapters keep an explicit allowlist in their
+            # config.extra rather than in an environment variable.  Honor that
+            # explicit policy here before the default-deny branch; otherwise an
+            # inbound event passes the adapter's own check but is rejected by
+            # the gateway-wide authz layer.
+            adapter = getattr(self, "adapters", {}).get(source.platform)
+            adapter_allow_all = bool(getattr(adapter, "allow_all_users", False)) if adapter else False
+            adapter_allowed_users = {
+                str(item).strip()
+                for item in (getattr(adapter, "allowed_users", set()) if adapter else set())
+                if str(item).strip()
+            }
+            adapter_allowed_chats = {
+                str(item).strip()
+                for item in (getattr(adapter, "allowed_chats", set()) if adapter else set())
+                if str(item).strip()
+            }
+            if adapter_allow_all:
+                return True
+            if user_id and (user_id in adapter_allowed_users or "*" in adapter_allowed_users):
+                return True
+            if source.chat_id and (source.chat_id in adapter_allowed_chats or "*" in adapter_allowed_chats):
+                return True
+
             # No env allowlist configured. Adapters that own their own
             # config-driven access policy (dm_policy / group_policy /
             # allow_from / group_allow_from) gate access at intake, so for those
