@@ -137,7 +137,7 @@ def test_session_work_dir_is_profile_local(tmp_path, monkeypatch):
     from plugins.platforms.max_userbot.adapter import MaxUserbotAdapter
 
     adapter = MaxUserbotAdapter(
-        PlatformConfig(enabled=True, extra={"phone": "+79990000000", "session_name": "main.db"})
+        PlatformConfig(enabled=True, extra={"phone": "+10000000000", "session_name": "main.db"})
     )
 
     assert adapter.work_dir == str(tmp_path / "max_userbot")
@@ -149,7 +149,7 @@ def test_validate_config_accepts_phone_or_existing_session(tmp_path, monkeypatch
     from plugins.platforms.max_userbot.adapter import validate_max_userbot_config
 
     assert validate_max_userbot_config(PlatformConfig(enabled=True)) is False
-    assert validate_max_userbot_config(PlatformConfig(enabled=True, extra={"phone": "+799****0000"})) is True
+    assert validate_max_userbot_config(PlatformConfig(enabled=True, extra={"phone": "+10000000000"})) is True
 
     work_dir = tmp_path / "sessions"
     work_dir.mkdir()
@@ -158,7 +158,7 @@ def test_validate_config_accepts_phone_or_existing_session(tmp_path, monkeypatch
         PlatformConfig(enabled=True, extra={"work_dir": str(work_dir), "session_name": "main.db"})
     ) is True
 
-    monkeypatch.setenv("MAX_USERBOT_PHONE", "+799****0000")
+    monkeypatch.setenv("MAX_USERBOT_PHONE", "+10000000000")
     assert validate_max_userbot_config(PlatformConfig(enabled=True)) is True
 
 
@@ -167,7 +167,7 @@ def test_session_lock_prevents_two_userbot_clients_for_same_session(tmp_path):
 
     cfg = PlatformConfig(
         enabled=True,
-        extra={"phone": "+799****0000", "work_dir": str(tmp_path), "session_name": "main.db"},
+        extra={"phone": "+10000000000", "work_dir": str(tmp_path), "session_name": "main.db"},
     )
     first = MaxUserbotAdapter(cfg)
     second = MaxUserbotAdapter(cfg)
@@ -186,7 +186,7 @@ def test_session_lock_prevents_two_userbot_clients_for_same_session(tmp_path):
 def test_message_to_event_maps_text_and_identity():
     from plugins.platforms.max_userbot.adapter import MaxUserbotAdapter
 
-    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+79990000000", "allow_all_users": True}))
+    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+10000000000", "allow_all_users": True}))
     message = FakePyMaxMessage(id=111, chat_id=777, sender=123, text="hello")
 
     event = adapter._message_to_event(message)
@@ -203,7 +203,7 @@ def test_message_to_event_maps_text_and_identity():
 def test_message_to_event_rejects_unallowlisted_sender():
     from plugins.platforms.max_userbot.adapter import MaxUserbotAdapter
 
-    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+79990000000", "allowed_users": ["123"]}))
+    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+10000000000", "allowed_users": ["123"]}))
 
     assert adapter._message_to_event(FakePyMaxMessage(sender=999)) is None
     assert adapter._message_to_event(FakePyMaxMessage(sender=123)) is not None
@@ -213,7 +213,7 @@ def test_message_to_event_ignores_own_account_messages():
     from plugins.platforms.max_userbot.adapter import MaxUserbotAdapter
 
     adapter = MaxUserbotAdapter(
-        PlatformConfig(enabled=True, extra={"phone": "+79990000000", "allow_all_users": True, "account_id": "123"})
+        PlatformConfig(enabled=True, extra={"phone": "+10000000000", "allow_all_users": True, "account_id": "123"})
     )
 
     assert adapter._message_to_event(FakePyMaxMessage(sender=123, text="self echo")) is None
@@ -222,7 +222,7 @@ def test_message_to_event_ignores_own_account_messages():
 def test_message_to_event_maps_photo_and_file_attachments():
     from plugins.platforms.max_userbot.adapter import MaxUserbotAdapter
 
-    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+79990000000", "allow_all_users": True}))
+    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+10000000000", "allow_all_users": True}))
     message = FakePyMaxMessage(
         text="see files",
         attaches=[FakePhotoAttachment("https://cdn.example/photo.jpg"), FakeFileAttachment(name="doc.pdf")],
@@ -240,7 +240,7 @@ def test_message_to_event_maps_photo_and_file_attachments():
 async def test_send_text_uses_pymax_client_send_message():
     from plugins.platforms.max_userbot.adapter import MaxUserbotAdapter
 
-    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+79990000000", "allow_all_users": True}))
+    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+10000000000", "allow_all_users": True}))
     client = FakePyMaxClient()
     adapter._client = client
 
@@ -258,7 +258,7 @@ async def test_send_text_uses_pymax_client_send_message():
 async def test_send_text_honors_reply_to():
     from plugins.platforms.max_userbot.adapter import MaxUserbotAdapter
 
-    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+79990000000", "allow_all_users": True}))
+    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+10000000000", "allow_all_users": True}))
     client = FakePyMaxClient()
     adapter._client = client
 
@@ -272,7 +272,7 @@ async def test_send_text_honors_reply_to():
 async def test_edit_message_uses_pymax_edit_message():
     from plugins.platforms.max_userbot.adapter import MaxUserbotAdapter
 
-    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+79990000000", "allow_all_users": True}))
+    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+10000000000", "allow_all_users": True}))
     client = FakePyMaxClient()
     adapter._client = client
 
@@ -288,7 +288,7 @@ async def test_inbound_handler_marks_read_and_dispatches(monkeypatch):
     from plugins.platforms.max_userbot.adapter import MaxUserbotAdapter
 
     adapter = MaxUserbotAdapter(
-        PlatformConfig(enabled=True, extra={"phone": "+79990000000", "allow_all_users": True, "mark_read": True})
+        PlatformConfig(enabled=True, extra={"phone": "+10000000000", "allow_all_users": True, "mark_read": True})
     )
     handled = []
 
@@ -309,7 +309,7 @@ async def test_inbound_handler_marks_read_and_dispatches(monkeypatch):
 async def test_send_exec_approval_uses_inline_keyboard_without_command_payload():
     from plugins.platforms.max_userbot.adapter import MaxUserbotAdapter
 
-    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+79990000000", "allow_all_users": True}))
+    adapter = MaxUserbotAdapter(PlatformConfig(enabled=True, extra={"phone": "+10000000000", "allow_all_users": True}))
     client = FakePyMaxClient()
     adapter._client = client
 

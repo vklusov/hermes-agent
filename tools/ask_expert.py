@@ -164,7 +164,7 @@ registry.register(
     },
     handler=ask_expert,
     description=(
-        "Advisory review for high-risk Hermes/VPS decisions: the background model makes "
+        "Advisory review for high-risk Hermes infrastructure decisions: the background model makes "
         "a concrete decision, then asks the configured arbiter model to confirm or reject it."
     ),
     is_async=False,

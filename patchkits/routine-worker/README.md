@@ -84,5 +84,5 @@ For CLI sessions, start a new session or run `/reset` after tools/config changes
 Published fork branch, if you prefer Git over patch files:
 
 ```text
-https://github.com/vklusov/hermes-agent/tree/feature/routine-worker-routing
+https://github.com/vklusov/hermes-agent/tree/routine-worker-routing-clean-v2-20260815
 ```

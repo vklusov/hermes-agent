@@ -16,7 +16,7 @@ patterns = {
     'private_key': re.compile(r'BEGIN (?:RSA|OPENSSH|EC|DSA)? ?PRIVATE KEY'),
     'real_neurogate_host': re.compile(r'(?:api\.)?neurogate\.space'),
     'local_ip': re.compile(r'\b(?:192\.168\.|100\.\d+\.)\d+\.\d+\b'),
-    'local_user_path': re.compile('/home/' + 'wwolfy' + r'|' + '/Users/' + r'[^/]+'),
+    'local_user_path': re.compile(r'/home/[^/\\s]+' + r'|' + r'/Users/[^/\\s]+'),
 }
 ignore_dirs = {'.git', '__pycache__'}
 findings = []

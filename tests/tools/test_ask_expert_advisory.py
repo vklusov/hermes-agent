@@ -25,11 +25,11 @@ def test_arbiter_agreement_returns_advisory_agreed(monkeypatch):
         return _Response('{"agrees": true, "verdict": "safe to proceed", "confidence": 0.9, "risks": [], "checks_before_change": [], "stop_conditions": []}')
 
     monkeypatch.setattr(module, "call_llm", fake_call_llm)
-    result = json.loads(module.ask_expert("update Hermes", "backup exists, clean checkout", "update VPS and Mac-93", "high"))
+    result = json.loads(module.ask_expert("update Hermes", "backup exists, clean checkout", "update staging and production", "high"))
     assert result["status"] == "agreed"
     assert result["decision"] == "manual_user_decision_required"
     assert result["advisory_only"] is True
-    assert result["gpt_decision"] == "update VPS and Mac-93"
+    assert result["gpt_decision"] == "update staging and production"
     assert len(calls) == 1
     assert calls[0]["provider"] == "custom:cockpit-codex"
     assert calls[0]["model"] == "gpt-5.6-sol"
@@ -46,11 +46,11 @@ def test_arbiter_disagreement_returns_rejected(monkeypatch):
         raise AssertionError(f"Unexpected arbiter model: {kwargs['model']}")
 
     monkeypatch.setattr(module, "call_llm", fake_call_llm)
-    result = json.loads(module.ask_expert("update Hermes", "git status shows modified files", "update VPS and Mac-93", "critical"))
+    result = json.loads(module.ask_expert("update Hermes", "git status shows modified files", "update staging and production", "critical"))
     assert result["status"] == "rejected"
     assert result["decision"] == "manual_user_decision_required"
     assert result["advisory_only"] is True
-    assert result["gpt_decision"] == "update VPS and Mac-93"
+    assert result["gpt_decision"] == "update staging and production"
     assert "Arbiter disagrees" in result["note"]
     assert [call["model"] for call in calls] == ["gpt-5.6-sol"]
 

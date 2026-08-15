@@ -1,5 +1,5 @@
 From f7045958da83003e30a7807e5e1bce8aab601756 Mon Sep 17 00:00:00 2001
-From: Archivarius <archivarius@local>
+From: Hermes PatchKit <patchkit@example.invalid>
 Date: Sat, 20 Jun 2026 09:19:15 +0000
 Subject: [PATCH 2/7] feat: add per-task model routing to routine worker tool
 

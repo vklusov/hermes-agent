@@ -1,5 +1,5 @@
 From c7eda072df462171e71e75dddb31c435333f7c97 Mon Sep 17 00:00:00 2001
-From: Archivarius <archivarius@local>
+From: Hermes PatchKit <patchkit@example.invalid>
 Date: Sat, 20 Jun 2026 09:47:25 +0000
 Subject: [PATCH 3/7] fix: forward routine worker model overrides through agent
  dispatch
