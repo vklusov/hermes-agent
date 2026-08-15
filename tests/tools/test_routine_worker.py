@@ -43,6 +43,49 @@ def test_web_research_strong_routes_to_qwen():
     assert delegate_args.get("model") == "qwen3.7-plus"
 
 
+def test_web_research_single_source_uses_delegate_single_goal_shape():
+    delegate_args = build_routine_delegate_args({
+        "task_type": "web_research",
+        "objective": "check the official supported countries page",
+        "sources": ["OpenAI supported countries"],
+    })
+
+    assert "tasks" not in delegate_args
+    assert "Research OpenAI supported countries" in delegate_args["goal"]
+    assert delegate_args["toolsets"] == ["web"]
+
+
+def test_web_research_multi_source_keeps_batch_shape():
+    delegate_args = build_routine_delegate_args({
+        "task_type": "web_research",
+        "objective": "compare sources",
+        "sources": ["official docs", "secondary verification"],
+    })
+
+    assert len(delegate_args["tasks"]) == 2
+    assert all(task["toolsets"] == ["web"] for task in delegate_args["tasks"])
+
+
+def test_resolve_routine_route_preserves_fallback_chain():
+    cfg = {
+        "web_research_strong": {
+            "provider": "custom:primary",
+            "model": "qwen3.7-plus",
+            "fallback_chain": [
+                {"provider": "custom:fallback", "model": "gpt-5.6-terra"},
+            ],
+        }
+    }
+
+    route = resolve_routine_route("web_research_strong", config=cfg)
+
+    assert route["provider"] == "custom:primary"
+    assert route["model"] == "qwen3.7-plus"
+    assert route["fallback_model"] == [
+        {"provider": "custom:fallback", "model": "gpt-5.6-terra"},
+    ]
+
+
 def test_cheap_flash_routes_to_deepseek():
     delegate_args = build_routine_delegate_args({
         "task_type": "cheap_flash",

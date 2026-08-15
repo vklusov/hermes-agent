@@ -412,10 +412,61 @@ class TestDelegateTask(unittest.TestCase):
                 if child_db is not None:
                     child_db.close()
                 parent_db.close()
+    def test_internal_fallback_model_override_reaches_child_agent(self):
+        parent = _make_mock_parent(depth=0)
+        fallback_chain = [{"provider": "custom:fallback", "model": "gpt-5.6-terra"}]
+
+        with patch("run_agent.AIAgent") as MockAgent, patch(
+            "tools.delegate_tool._resolve_delegation_credentials",
+            return_value={
+                "provider": "custom:primary",
+                "model": "qwen3.7-plus",
+                "base_url": None,
+                "api_key": None,
+                "api_mode": None,
+                "command": None,
+                "args": None,
+            },
+        ):
+            mock_child = MagicMock()
+            mock_child.run_conversation.return_value = {
+                "final_response": "ok",
+                "completed": True,
+                "api_calls": 1,
+            }
+            MockAgent.return_value = mock_child
+
+            delegate_task(
+                goal="Test fallback override",
+                parent_agent=parent,
+                provider="custom:primary",
+                model="qwen3.7-plus",
+                fallback_model=fallback_chain,
+            )
+
+            _, kwargs = MockAgent.call_args
+            self.assertEqual(kwargs["model"], "qwen3.7-plus")
+            self.assertEqual(kwargs["provider"], "custom:primary")
+            self.assertEqual(kwargs["fallback_model"], fallback_chain)
+
+    def test_child_inherits_parent_print_fn(self):
+        parent = _make_mock_parent(depth=0)
+        sink = MagicMock()
+        parent._print_fn = sink
+
+        with patch("run_agent.AIAgent") as MockAgent:
+            mock_child = MagicMock()
+            MockAgent.return_value = mock_child
+            _build_child_agent(
+                task_index=0, goal="Keep stdout clean", context=None,
+                toolsets=None, model=None, max_iterations=10,
+                parent_agent=parent, task_count=1,
+            )
+
+        self.assertIs(mock_child._print_fn, sink)
 
     def test_nous_child_rederives_api_mode_from_model(self):
-        """Portal is dual-wire — same provider + different model prefix must
-        not inherit the parent's Messages/chat_completions mode verbatim."""
+        """Portal is dual-wire; child mode follows the selected model."""
         parent = _make_mock_parent(depth=0)
         parent.base_url = "https://inference-api.nousresearch.com/v1"
         parent.api_key = "portal-jwt"
@@ -1350,8 +1401,8 @@ class TestDelegationReasoningEffort(unittest.TestCase):
 class TestDispatchDelegateTask(unittest.TestCase):
     """Tests for the _dispatch_delegate_task helper and full param forwarding."""
 
-    def test_model_acp_args_not_forwarded(self):
-        """The live model dispatch path strips hidden ACP transport args."""
+    def test_internal_acp_args_forwarded_but_nested_model_fields_stripped(self):
+        """Trusted top-level transport args pass through; nested model fields do not."""
         import run_agent
 
         captured = {}
@@ -1378,8 +1429,8 @@ class TestDispatchDelegateTask(unittest.TestCase):
                 },
             )
 
-        self.assertNotIn("acp_command", captured)
-        self.assertNotIn("acp_args", captured)
+        self.assertEqual(captured["acp_command"], "claude")
+        self.assertEqual(captured["acp_args"], ["--acp", "--stdio"])
         self.assertEqual(captured["goal"], "test")
         self.assertNotIn("acp_command", captured["tasks"][0])
         self.assertNotIn("acp_args", captured["tasks"][0])

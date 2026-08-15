@@ -88,6 +88,49 @@ def test_unrouted_runtime_keeps_parent_pool_and_overrides():
     assert rt["max_tokens"] == 4096
 
 
+def test_routing_keeps_explicit_task_model_over_provider_default():
+    agent = _FakeAgent(provider="custom:cockpit-codex", model="gpt-5.5")
+    cfg = {"auxiliary": {"background_review": {
+        "provider": "custom:odirouter",
+        "model": "qwen3.5-flash",
+        "api_mode": "chat_completions",
+    }}}
+    fake_rp = {
+        "provider": "custom", "api_key": "odi-key",
+        "base_url": "https://api.odirouter.ai/v1", "api_mode": "chat_completions",
+        "model": "gpt-5.5",
+    }
+    with patch("hermes_cli.config.load_config", return_value=cfg), \
+         patch("hermes_cli.config.load_config_readonly", return_value=cfg), \
+         patch("hermes_cli.runtime_provider.resolve_runtime_provider", return_value=fake_rp):
+        rt = br._resolve_review_runtime(agent)
+    assert rt["routed"] is True
+    assert rt["provider"] == "custom"
+    assert rt["model"] == "qwen3.5-flash"
+    assert rt["api_mode"] == "chat_completions"
+
+
+def test_routing_explicit_api_mode_overrides_resolved_runtime_mode():
+    agent = _FakeAgent(provider="custom:responses-primary", model="gpt-5.5")
+    cfg = {"auxiliary": {"background_review": {
+        "provider": "custom:responses-primary",
+        "model": "gpt-5.4-mini",
+        "api_mode": "chat_completions",
+    }}}
+    fake_rp = {
+        "provider": "custom:responses-primary", "api_key": "test-key",
+        "base_url": "https://responses.example/v1", "api_mode": "codex_responses",
+    }
+    with patch("hermes_cli.config.load_config", return_value=cfg), \
+         patch("hermes_cli.config.load_config_readonly", return_value=cfg), \
+         patch("hermes_cli.runtime_provider.resolve_runtime_provider", return_value=fake_rp):
+        rt = br._resolve_review_runtime(agent)
+    assert rt["routed"] is True
+    assert rt["provider"] == "custom:responses-primary"
+    assert rt["model"] == "gpt-5.4-mini"
+    assert rt["api_mode"] == "chat_completions"
+
+
 def test_routing_same_model_as_parent_is_not_routed():
     agent = _FakeAgent(provider="openrouter", model="anthropic/claude-opus-4.8")
     cfg = {"auxiliary": {"background_review": {

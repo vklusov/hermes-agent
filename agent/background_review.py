@@ -81,6 +81,7 @@ def _resolve_review_runtime(agent: Any) -> Dict[str, Any]:
     task_model = (str(task.get("model", "")).strip() or None)
     task_base_url = (str(task.get("base_url", "")).strip() or None)
     task_api_key = (str(task.get("api_key", "")).strip() or None)
+    task_api_mode = (str(task.get("api_mode", "")).strip() or None)
     if not (task_provider and task_provider != "auto" and task_model):
         return parent
     if task_provider == (agent.provider or "") and task_model == (agent.model or ""):
@@ -95,10 +96,10 @@ def _resolve_review_runtime(agent: Any) -> Dict[str, Any]:
         )
         return {
             "provider": rp.get("provider") or task_provider,
-            "model": rp.get("model") or task_model,
+            "model": task_model or rp.get("model"),
             "api_key": rp.get("api_key"),
             "base_url": rp.get("base_url"),
-            "api_mode": rp.get("api_mode"),
+            "api_mode": task_api_mode or rp.get("api_mode"),
             "credential_pool": rp.get("credential_pool"),
             "request_overrides": dict(rp.get("request_overrides") or {}),
             "max_tokens": rp.get("max_output_tokens"),

@@ -1197,12 +1197,18 @@ def _blocked_toolsets_for_role(role: str) -> List[str]:
     blocked_names = set(DELEGATE_BLOCKED_TOOLS)
     if role == "orchestrator":
         blocked_names.discard("delegate_task")
-    return sorted(
+    denied = {
         name
         for name, defn in TOOLSETS.items()
         if defn.get("tools")
         and set(defn.get("tools", ())).issubset(blocked_names)
-    )
+    }
+    # ``delegation`` is a mixed composite (delegate_task + routine_worker),
+    # so subset inference alone cannot classify it. Leaf children must deny
+    # the composite explicitly; orchestrators re-enable it by role.
+    if role != "orchestrator":
+        denied.add("delegation")
+    return sorted(denied)
 
 
 def _emit_parent_console(parent_agent, line: str) -> None:
@@ -1479,6 +1485,7 @@ def _build_child_agent(
     override_api_mode: Optional[str] = None,
     override_request_overrides: Optional[Dict[str, Any]] = None,
     override_max_tokens: Optional[int] = None,
+    override_fallback_model: Optional[Any] = None,
     # ACP transport overrides from trusted delegation config.
     override_acp_command: Optional[str] = None,
     override_acp_args: Optional[List[str]] = None,
@@ -1728,11 +1735,13 @@ def _build_child_agent(
     except Exception as exc:
         logger.debug("Could not load delegation reasoning_effort: %s", exc)
 
-    # Inherit the parent's fallback provider chain so subagents can recover
-    # from rate-limits and credential exhaustion exactly like the top-level
-    # agent does.  _fallback_chain is a list accepted by AIAgent's
-    # fallback_model parameter (which handles both list and dict forms).
-    parent_fallback = getattr(parent_agent, "_fallback_chain", None) or None
+    # Inherit the parent's fallback provider chain by default so subagents can
+    # recover from rate-limits and credential exhaustion exactly like the
+    # top-level agent does. Internal callers (routine_worker) may supply a
+    # per-route fallback chain so e.g. web_research_strong can downgrade from
+    # qwen3.7-plus to the configured research worker without changing global
+    # fallback policy. _fallback_chain/fallback_model accepts both list/dict.
+    parent_fallback = override_fallback_model or getattr(parent_agent, "_fallback_chain", None) or None
 
     # Inherit the parent's OpenRouter provider-preference filters by default
     # (so subagents routed to the same provider honour the same routing
@@ -3435,6 +3444,7 @@ def delegate_task(
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
     api_mode: Optional[str] = None,
+    fallback_model: Optional[Any] = None,
     acp_command: Optional[str] = None,
     acp_args: Optional[List[str]] = None,
     role: Optional[str] = None,
@@ -3530,6 +3540,8 @@ def delegate_task(
     }.items():
         if isinstance(_value, str) and _value.strip():
             cfg[_key] = _value.strip()
+    if fallback_model:
+        cfg["fallback_model"] = fallback_model
     default_max_iter = cfg.get("max_iterations", DEFAULT_MAX_ITERATIONS)
     # Model-supplied max_iterations is ignored — the config value is authoritative
     # so users get predictable budgets. The kwarg is retained for internal callers
@@ -3671,16 +3683,10 @@ def delegate_task(
 
     # Build all child agents on the main thread (thread-safe construction).
     # _build_child_preserving_parent_tools saves/restores the parent's
-    # resolved tool names around each construction under a lock, so child
-    # toolset resolution never leaks into the parent (shared with the plugin
-    # subagent-lifecycle API).
+    # resolved tool names around each construction under a lock.
     children = []
     for i, t in enumerate(task_list):
-        # Per-task role beats top-level; normalise again so unknown
-        # per-task values warn and degrade to leaf uniformly.
         effective_role = _normalize_role(t.get("role") or top_role)
-        # T1-24: schema'd tasks get the contract appended to their context
-        # so the child knows the expected output shape before it starts.
         _task_schema = task_schemas[i] if i < len(task_schemas) else None
         _child_context = t.get("context")
         if _task_schema is not None:
@@ -3691,8 +3697,6 @@ def delegate_task(
             task_index=i,
             goal=t["goal"],
             context=_child_context,
-            # Subagents always inherit the parent's toolsets; the model
-            # cannot choose or narrow them (no model-facing toolsets arg).
             toolsets=None,
             model=creds["model"],
             max_iterations=effective_max_iter,
@@ -3704,22 +3708,16 @@ def delegate_task(
             override_api_mode=creds["api_mode"],
             override_request_overrides=creds.get("request_overrides"),
             override_max_tokens=creds.get("max_output_tokens"),
+            override_fallback_model=cfg.get("fallback_model"),
             override_acp_command=creds.get("command"),
             override_acp_args=creds.get("args"),
             role=effective_role,
         )
-        # Attach the validated schema for the completion-side validation
-        # hook in _run_single_child. Absent (None) on schema-less tasks.
         if _task_schema is not None:
             try:
                 child._delegate_output_schema = _task_schema
             except Exception:
                 logger.debug("Could not attach output schema to child %d", i)
-        # Tee the child's progress events into its live transcript log.
-        # wrap_progress_callback preserves the inner callback contract
-        # (including the _flush attribute) and never lets writer failures
-        # reach the agent loop. When no parent display exists the inner
-        # callback is None and the wrapper still records events.
         _writer = live_writers[i] if i < len(live_writers) else None
         if _writer is not None:
             child.tool_progress_callback = wrap_progress_callback(
@@ -4744,6 +4742,7 @@ registry.register(
         base_url=args.get("base_url"),
         api_key=args.get("api_key"),
         api_mode=args.get("api_mode"),
+        fallback_model=args.get("fallback_model"),
         acp_command=args.get("acp_command"),
         acp_args=args.get("acp_args"),
         role=args.get("role"),

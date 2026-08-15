@@ -215,7 +215,7 @@ def _load_routine_worker_config() -> dict[str, Any]:
         return {}
 
 
-def resolve_routine_route(task_type: str, config: dict[str, Any] | None = None) -> dict[str, str]:
+def resolve_routine_route(task_type: str, config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Resolve provider/model for a routine-worker preset.
 
     Config wins, then built-in defaults. Returns only non-empty string values so
@@ -233,13 +233,32 @@ def resolve_routine_route(task_type: str, config: dict[str, Any] | None = None) 
     if not route:
         route.update(_DEFAULT_ROUTING.get(task_type) or _DEFAULT_ROUTING["default"])
 
-    return {
+    resolved = {
         key: str(value).strip()
         for key, value in route.items()
         if key in {"provider", "model", "base_url", "api_key", "api_mode"}
         and isinstance(value, str)
         and value.strip()
     }
+
+    fallback_chain = route.get("fallback_chain")
+    if isinstance(fallback_chain, list) and fallback_chain:
+        resolved["fallback_model"] = [
+            {
+                key: str(value).strip()
+                for key, value in item.items()
+                if key in {"provider", "model", "base_url", "api_key", "api_mode"}
+                and isinstance(value, str)
+                and value.strip()
+            }
+            for item in fallback_chain
+            if isinstance(item, dict)
+        ]
+        resolved["fallback_model"] = [item for item in resolved["fallback_model"] if item.get("model")]
+        if not resolved["fallback_model"]:
+            resolved.pop("fallback_model", None)
+
+    return resolved
 
 
 def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
@@ -282,6 +301,16 @@ def build_routine_delegate_args(args: dict[str, Any]) -> dict[str, Any]:
 
     if task_type in {"web_research", "web_research_strong", "cheap_flash"}:
         selected = sources or ["official/source docs", "web search results", "secondary verification"]
+        if len(selected) == 1:
+            source = selected[0]
+            return {
+                "goal": f"Research {source}: {objective}",
+                "context": _worker_context(context, f"Focus only on source lane: {source}. Return URLs and quoted/grounded findings."),
+                "toolsets": toolsets or ["web"],
+                "role": "leaf",
+                "background": bool(args.get("background", False)),
+                **route,
+            }
         tasks = [
             {
                 "goal": f"Research {source}: {objective}",
