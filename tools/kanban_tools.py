@@ -35,6 +35,7 @@ from typing import Any, Optional
 
 from agent.redact import redact_sensitive_text
 from hermes_cli.goals import judge_goal
+from hermes_cli.policy_cmd import check_evidence, classify_intent
 from tools.registry import registry, tool_error
 from hermes_cli.config import cfg_get, load_config
 
@@ -440,6 +441,33 @@ def _ok(**fields: Any) -> str:
     return json.dumps({"ok": True, **fields})
 
 
+def _fleet_evidence_completion_rejection(task: Any, metadata: Any) -> str | None:
+    text = " ".join(
+        str(part or "") for part in (
+            getattr(task, "title", ""),
+            getattr(task, "body", ""),
+        )
+    )
+    preflight = classify_intent(text)
+    if not preflight.get("is_fleet_change"):
+        return None
+    if not isinstance(metadata, dict):
+        return "metadata must include durable fleet-change evidence before final done"
+
+    nested_evidence = metadata.get("evidence")
+    evidence: dict[str, Any] = nested_evidence if isinstance(nested_evidence, dict) else metadata
+    result = check_evidence(evidence)
+    if result["allowed"]:
+        return None
+    return (
+        "fleet-change completion requires durable evidence before final done; "
+        "missing: " + ", ".join(result["missing_fields"])
+        + ". Include metadata.evidence (or equivalent metadata fields) with "
+        "evidence_path, backups, changed_paths, hashes, approvals, smoke per "
+        "node, and retention_decision."
+    )
+
+
 def _normalize_profile(value: Any) -> Optional[str]:
     """Normalize CLI-compatible assignee sentinels for the tool surface."""
     if value is None:
@@ -764,6 +792,10 @@ def _handle_complete(args: dict, **kw) -> str:
                     f"or (2) create continuation tasks with parents=[{tid}] "
                     f"and keep this task alive."
                 )
+
+            rejection = _fleet_evidence_completion_rejection(task, metadata)
+            if rejection is not None:
+                return tool_error(f"kanban_complete blocked: {rejection}")
 
             try:
                 ok = kb.complete_task(

@@ -132,6 +132,100 @@ def test_complete_happy_path(worker_env):
         conn.close()
 
 
+def test_complete_blocks_fleet_change_without_durable_evidence(monkeypatch, tmp_path):
+    from pathlib import Path as _Path
+    from hermes_cli import kanban_db as kb
+    from tools import kanban_tools as kt
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_PROFILE", "test-worker")
+    monkeypatch.delenv("HERMES_SESSION_ID", raising=False)
+    monkeypatch.setattr(_Path, "home", lambda: tmp_path)
+
+    kb._INITIALIZED_PATHS.clear()
+    kb.init_db()
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(
+            conn,
+            title="Change Hermes provider routing",
+            assignee="test-worker",
+            body="Apply provider route change across Fedor, 93, and Archivarius.",
+        )
+        kb.claim_task(conn, tid)
+    finally:
+        conn.close()
+    monkeypatch.setenv("HERMES_KANBAN_TASK", tid)
+
+    out = kt._handle_complete({"summary": "done", "metadata": {"changed_paths": ["config.yaml"]}})
+    payload = json.loads(out)
+
+    assert "error" in payload
+    assert "fleet-change completion requires durable evidence" in payload["error"]
+    assert "evidence_path" in payload["error"]
+
+    conn = kb.connect()
+    try:
+        task = kb.get_task(conn, tid)
+        assert task is not None
+        assert task.status == "running"
+    finally:
+        conn.close()
+
+
+def test_complete_allows_fleet_change_with_durable_evidence(monkeypatch, tmp_path):
+    from pathlib import Path as _Path
+    from hermes_cli import kanban_db as kb
+    from tools import kanban_tools as kt
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_PROFILE", "test-worker")
+    monkeypatch.delenv("HERMES_SESSION_ID", raising=False)
+    monkeypatch.setattr(_Path, "home", lambda: tmp_path)
+
+    kb._INITIALIZED_PATHS.clear()
+    kb.init_db()
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(
+            conn,
+            title="Restart Hermes gateway on fleet",
+            assignee="test-worker",
+            body="Runtime config change with smoke on Fedor, 93, and Archivarius.",
+        )
+        kb.claim_task(conn, tid)
+    finally:
+        conn.close()
+    monkeypatch.setenv("HERMES_KANBAN_TASK", tid)
+
+    evidence = {
+        "evidence_path": "/tmp/release/evidence.md",
+        "backups": ["/tmp/release/config.before.yaml"],
+        "changed_paths": ["~/.hermes/config.yaml"],
+        "hashes": {"before": "abc", "after": "def"},
+        "approvals": ["approved by Vadim in task t_example"],
+        "smoke": {"Fedor": "PASS", "93": "PASS", "Archivarius": "PASS"},
+        "retention_decision": "retain backups under release directory",
+    }
+
+    out = kt._handle_complete({"summary": "done", "metadata": {"evidence": evidence}})
+    payload = json.loads(out)
+
+    assert payload["ok"] is True
+    conn = kb.connect()
+    try:
+        run = kb.latest_run(conn, tid)
+        assert run is not None
+        assert run.outcome == "completed"
+        assert run.metadata["evidence"]["evidence_path"] == "/tmp/release/evidence.md"
+    finally:
+        conn.close()
+
+
 def test_complete_retry_with_empty_created_cards_succeeds(worker_env):
     """After a phantom rejection, retrying kanban_complete with
     created_cards=[] (the documented escape hatch) must complete the
