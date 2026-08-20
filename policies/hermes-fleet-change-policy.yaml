@@ -49,11 +49,100 @@ required_stages:
   - read_only_audit
   - proposal_and_approval
   - backup_marker
+  - fedor_apply
   - fedor_smoke
+  - mac93_apply
   - mac93_smoke
+  - archivarius_apply
   - archivarius_smoke
   - evidence
   - retention
+rollout_state_machine:
+  initial_stage: classify
+  override_field: policy_override
+  stages:
+    classify:
+      phase: audit
+      required_completed: []
+      evidence_required: false
+    read_only_audit:
+      phase: audit
+      required_completed:
+        - classify
+      evidence_required: true
+    proposal_and_approval:
+      phase: proposal
+      required_completed:
+        - read_only_audit
+      evidence_required: true
+    backup_marker:
+      phase: backup
+      required_completed:
+        - proposal_and_approval
+      evidence_required: true
+    fedor_apply:
+      phase: apply
+      node: Fedor
+      required_completed:
+        - backup_marker
+      evidence_required: true
+    fedor_smoke:
+      phase: smoke
+      node: Fedor
+      required_completed:
+        - fedor_apply
+      evidence_required: true
+    mac93_apply:
+      phase: apply
+      node: '93'
+      required_completed:
+        - fedor_smoke
+      evidence_required: true
+    mac93_smoke:
+      phase: smoke
+      node: '93'
+      required_completed:
+        - mac93_apply
+      evidence_required: true
+    archivarius_apply:
+      phase: apply
+      node: Archivarius
+      required_completed:
+        - mac93_smoke
+      evidence_required: true
+    archivarius_smoke:
+      phase: smoke
+      node: Archivarius
+      required_completed:
+        - archivarius_apply
+      evidence_required: true
+    evidence:
+      phase: evidence
+      required_completed:
+        - archivarius_smoke
+      evidence_required: true
+    retention:
+      phase: retention
+      required_completed:
+        - evidence
+      evidence_required: true
+evidence_schema:
+  required_fields:
+    - evidence_path
+    - backups
+    - changed_paths
+    - hashes
+    - approvals
+    - smoke
+    - retention_decision
+  per_stage_required_fields:
+    - evidence_path
+    - status
+    - recorded_at
+  smoke_nodes:
+    - Fedor
+    - '93'
+    - Archivarius
 requires_approval_for:
   - write
   - restart
