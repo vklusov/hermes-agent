@@ -340,31 +340,38 @@ def check_systemd_timing_alignment(drain_timeout: float) -> Optional[Dict[str, A
     if not invocation_id:
         return None  # Not running under systemd (or at least not directly)
 
-    # Try to identify our unit name and ask systemctl for its config.
+    # Try to identify our unit name and ask the owning systemd manager for its
+    # config.  systemctl --user show can return default-looking values for a
+    # nonexistent user unit, so do not try user scope for a system-slice unit.
     unit_name: Optional[str] = None
+    manager_flags = (["--user"], [])
     try:
-        # /proc/self/cgroup gives us "0::/user.slice/.../hermes-gateway.service"
+        # /proc/self/cgroup gives us either a user unit path such as
+        # "0::/user.slice/.../app.slice/hermes-gateway.service" or a system
+        # path such as "0::/system.slice/hermes-gateway.service".
         with open("/proc/self/cgroup", encoding="utf-8") as fh:
             for line in fh:
-                # systemd cgroup line ends with the unit name
-                if ".service" in line:
-                    parts = line.strip().split("/")
-                    for p in reversed(parts):
-                        if p.endswith(".service"):
-                            unit_name = p
-                            break
-                    if unit_name:
+                if ".service" not in line:
+                    continue
+                cgroup_path = line.strip().split(":", 2)[-1]
+                parts = cgroup_path.split("/")
+                for p in reversed(parts):
+                    if p.endswith(".service"):
+                        unit_name = p
                         break
+                if unit_name:
+                    if "/system.slice/" in cgroup_path:
+                        manager_flags = ([],)
+                    elif "/user.slice/" in cgroup_path:
+                        manager_flags = (["--user"],)
+                    break
     except (OSError, FileNotFoundError):
         pass
     if not unit_name:
         return None
 
-    # Query systemctl for TimeoutStopUSec.  Use --user OR system depending
-    # on which manager actually owns the unit.  Try user first since
-    # that's the common case for hermes.
     timeout_us: Optional[int] = None
-    for flag in (["--user"], []):
+    for flag in manager_flags:
         try:
             result = subprocess.run(
                 ["systemctl", *flag, "show", unit_name, "--property=TimeoutStopUSec"],
