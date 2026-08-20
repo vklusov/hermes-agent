@@ -22,6 +22,7 @@ class TestHermesApiServerToolset:
             "vision_analyze", "image_generate",
             "execute_code", "delegate_task",
             "todo", "memory", "session_search", "cronjob",
+            "ask_expert",
         ]
         for tool in expected:
             assert tool in tools, f"Missing expected tool: {tool}"

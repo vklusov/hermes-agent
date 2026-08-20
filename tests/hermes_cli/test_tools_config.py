@@ -62,6 +62,26 @@ def test_valid_platform_toolsets_no_runtime_warning(caplog):
     assert not any("#38798" in r.getMessage() for r in caplog.records)
 
 
+def test_platform_composites_expand_native_ask_expert_toolset():
+    """ask_expert is a native skill tool and must survive saved composites.
+
+    Users commonly have ``platform_toolsets.cli = ["hermes-cli"]`` and
+    ``platform_toolsets.telegram = ["hermes-telegram"]`` after running
+    ``hermes tools``. The resolver expands those composites into configurable
+    toolsets before first-turn schemas are built, so ask_expert needs an
+    authored static toolset entry rather than only a registry-only toolset.
+    """
+    config = {
+        "platform_toolsets": {
+            "cli": ["hermes-cli"],
+            "telegram": ["hermes-telegram"],
+        }
+    }
+
+    assert "hermes-ask-expert" in _get_platform_tools(config, "cli")
+    assert "hermes-ask-expert" in _get_platform_tools(config, "telegram")
+
+
 def test_partially_valid_platform_toolsets_no_runtime_warning(caplog):
     """When at least one configured toolset is valid, tools still resolve, so
     the runtime zero-tools warning must not fire (the migration-time check still
