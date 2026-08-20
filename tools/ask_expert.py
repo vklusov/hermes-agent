@@ -138,23 +138,20 @@ def _handle_ask_expert(args: dict[str, Any], **_kwargs: Any) -> str:
 
 
 ASK_EXPERT_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "ask_expert",
-        "description": (
-            "Ask the configured expert model for advisory-only technical review. "
-            "Routes explicitly to custom:anymodel / claude-sonnet-5."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "task": {
-                    "type": "string",
-                    "description": "Specific technical or architectural question for expert review.",
-                }
-            },
-            "required": ["task"],
+    "name": "ask_expert",
+    "description": (
+        "Ask the configured expert model for advisory-only technical review. "
+        "Routes explicitly to custom:anymodel / claude-sonnet-5."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "Specific technical or architectural question for expert review.",
+            }
         },
+        "required": ["task"],
     },
 }
 

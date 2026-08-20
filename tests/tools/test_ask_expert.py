@@ -38,6 +38,8 @@ def test_tool_is_registered_for_native_skill_startup():
     assert entry is not None
     assert entry.toolset == "hermes-ask-expert"
     assert entry.handler is ask_expert_module._handle_ask_expert
+    assert entry.schema["parameters"]["required"] == ["task"]
+    assert entry.schema["parameters"]["properties"]["task"]["type"] == "string"
 
 
 def test_ask_expert_routes_only_to_anymodel_sonnet(monkeypatch):
@@ -119,3 +121,23 @@ def test_registry_dispatch_invokes_ask_expert_handler(monkeypatch):
 
     assert result == "dispatched answer"
     assert captured["task"] == "Need Sonnet advice"
+
+
+def test_registry_dispatch_reports_missing_ask_expert_task():
+    import tools.ask_expert  # noqa: F401 - registers the native tool
+    from tools.registry import registry
+
+    result_text = registry.dispatch(
+        "ask_expert",
+        {},
+        task_id="cron-update-gate",
+        session_id="session-1",
+        enabled_tools={"ask_expert"},
+    )
+    assert isinstance(result_text, str)
+    result = json.loads(result_text)
+
+    assert result == {
+        "status": "error",
+        "reason": "missing required string field: task",
+    }
