@@ -3536,6 +3536,52 @@ def _gateway_config_home() -> Path:
     return _hermes_home
 
 
+def _gateway_activate_auto_preloaded_native_skills(skill_names):
+    from agent.native_skills import activate_auto_preloaded_native_skills
+
+    return activate_auto_preloaded_native_skills(skill_names)
+
+
+def _gateway_format_native_skill_log(activations):
+    from agent.native_skills import format_native_skill_log
+
+    return format_native_skill_log(activations)
+
+
+def _gateway_prepare_auto_skill_names(
+    raw_config: dict,
+    *,
+    event_auto_skill=None,
+    session_key: str = "",
+) -> list[str]:
+    """Merge global gateway auto-preload skills with event-bound skills.
+
+    Native handlers are activated here so the first agent turn sees their tool
+    schemas before model_tools assembles the allowed tool list.
+    """
+
+    from cli import _parse_skills_argument
+
+    global_skills = _parse_skills_argument(
+        ((raw_config or {}).get("skills") or {}).get("auto_preload")
+    )
+    if event_auto_skill is None:
+        event_skills = []
+    elif isinstance(event_auto_skill, str):
+        event_skills = [event_auto_skill]
+    else:
+        event_skills = list(event_auto_skill)
+    skill_names = _parse_skills_argument(global_skills + _parse_skills_argument(event_skills))
+    activations = _gateway_activate_auto_preloaded_native_skills(skill_names)
+    if activations:
+        logger.info(
+            "[Gateway] native_skill_loaded source=auto_preload session=%s skills=%s",
+            session_key,
+            _gateway_format_native_skill_log(activations),
+        )
+    return skill_names
+
+
 def _load_gateway_config(config_path: "Path | None" = None) -> dict:
     """Load and parse a gateway config.yaml, returning {} on any error.
 
@@ -18959,8 +19005,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Only inject on NEW sessions — ongoing conversations already have the
         # skill content in their conversation history from the first message.
         _auto = getattr(event, "auto_skill", None)
-        if _is_new_session and _auto:
-            _skill_names = [_auto] if isinstance(_auto, str) else list(_auto)
+        if _is_new_session:
+            _skill_names = _gateway_prepare_auto_skill_names(
+                _load_gateway_config(),
+                event_auto_skill=_auto,
+                session_key=session_key,
+            )
+        else:
+            _skill_names = []
+        if _is_new_session and _skill_names:
             try:
                 from agent.skill_commands import _load_skill_payload, _build_skill_message
                 _combined_parts: list[str] = []

@@ -71,11 +71,13 @@ _HERMES_CORE_TOOLS = [
     # Clarifying questions
     "clarify",
     # Code execution + delegation
-    "execute_code", "delegate_task",
+    "execute_code", "delegate_task", "routine_worker",
     # Cronjob management
     "cronjob",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
     "ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service",
+    # Advisory expert route (native skill bootstrap, explicit AnyModel Sonnet)
+    "ask_expert",
     # Kanban multi-agent coordination — only in schema when the agent is
     # spawned as a kanban worker (HERMES_KANBAN_TASK env set) or the current
     # profile explicitly enables the kanban toolset. Gated via check_fn in
@@ -297,8 +299,8 @@ TOOLSETS = {
     },
     
     "delegation": {
-        "description": "Spawn subagents with isolated context for complex subtasks",
-        "tools": ["delegate_task"],
+        "description": "Spawn subagents with isolated context for complex subtasks; includes routine_worker presets for broad routine work",
+        "tools": ["delegate_task", "routine_worker"],
         "includes": []
     },
 

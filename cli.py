@@ -8316,10 +8316,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if getattr(self, "_preload_skills_finalized", False):
             return
         thread = getattr(self, "_preload_skills_thread", None)
-        if thread is None:
+        if thread is None and not getattr(self, "_preload_skills_result", None):
             self._preload_skills_finalized = True
             return
-        thread.join(timeout=120)
+        if thread is not None:
+            thread.join(timeout=120)
         self._preload_skills_finalized = True
         err = getattr(self, "_preload_skills_error", None)
         if err is not None:
@@ -8328,20 +8329,26 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if not result:
             return
         skills_prompt, loaded_skills, missing_skills = result
-        if missing_skills:
-            missing_display = ", ".join(missing_skills)
-            # If at least one skill loaded, degrade gracefully: skip the
-            # unknown ones and continue. A typo'd skill name should not crash
-            # the worker (which auto-blocks the Kanban task after retries).
-            # Only when EVERY requested skill is missing do we hard-fail, so a
-            # fully-misconfigured worker fails loudly instead of running blind.
-            if loaded_skills:
+        native_skills = list(getattr(self, "_native_preloaded_skills", []) or [])
+        native_set = set(native_skills)
+        missing_prompt_skills = [name for name in missing_skills if name not in native_set]
+        loaded_or_native = list(loaded_skills)
+        for name in native_skills:
+            if name not in loaded_or_native:
+                loaded_or_native.append(name)
+        if missing_prompt_skills:
+            missing_display = ", ".join(missing_prompt_skills)
+            # If at least one skill loaded or activated natively, degrade gracefully:
+            # skip unknown prompt-only names and continue. A native skill may not
+            # have a SKILL.md payload on a canary host, but its registered handler
+            # is enough for startup tool readiness.
+            if loaded_or_native:
                 logger.warning(
                     "Unknown skill(s) requested, skipping: %s. "
                     "Continuing with: %s. "
                     "List available skills with `hermes skills list`.",
                     missing_display,
-                    ", ".join(loaded_skills),
+                    ", ".join(loaded_or_native),
                 )
             else:
                 raise ValueError(f"Unknown skill(s): {missing_display}")
@@ -8349,7 +8356,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self.system_prompt = "\n\n".join(
                 part for part in (self.system_prompt, skills_prompt) if part
             ).strip()
-            self.preloaded_skills = loaded_skills
+        self.preloaded_skills = loaded_or_native
 
     def show_banner(self):
         """Display the welcome banner in Claude Code style."""
@@ -20545,7 +20552,27 @@ def main(
             from hermes_cli.tools_config import _get_platform_tools
             toolsets_list = sorted(_get_platform_tools(CLI_CONFIG, "cli"))
     
-    parsed_skills = _parse_skills_argument(skills)
+    configured_auto_skills = _parse_skills_argument(
+        (CLI_CONFIG.get("skills") or {}).get("auto_preload")
+    )
+    parsed_skills = _parse_skills_argument(configured_auto_skills + _parse_skills_argument(skills))
+    native_preloaded_skills: list[str] = []
+    if parsed_skills:
+        try:
+            from agent.native_skills import (
+                activate_auto_preloaded_native_skills,
+                format_native_skill_log,
+            )
+
+            _native_activations = activate_auto_preloaded_native_skills(parsed_skills)
+            native_preloaded_skills = [item.name for item in _native_activations]
+            if _native_activations:
+                logger.info(
+                    "native_skill_loaded source=cli skills=%s",
+                    format_native_skill_log(_native_activations),
+                )
+        except Exception:
+            logger.warning("native skill activation failed", exc_info=True)
 
     # Create CLI instance
     cli = HermesCLI(
@@ -20564,6 +20591,8 @@ def main(
         pass_session_id=pass_session_id,
         ignore_rules=ignore_rules,
     )
+
+    cli._native_preloaded_skills = native_preloaded_skills
 
     if parsed_skills:
         # Load the skill payloads in the background: skill_view walks the

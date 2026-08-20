@@ -155,6 +155,47 @@ class TestCustomProviderPoolLoopbackNoKeyExemption:
         assert result["api_key"] == "sk-genuinely-long-real-key-12345"
 
 
+def test_named_custom_provider_honors_target_model_over_default(monkeypatch):
+    """Aux/background routing must not silently use a custom provider's default model.
+
+    A named OpenAI-compatible proxy can advertise several models while keeping
+    a stronger model as its provider-level default. Callers such as
+    auxiliary.background_review pass target_model explicitly; the resolver must
+    return that target when the custom provider catalog serves it, otherwise
+    cheap/background routes get billed as the expensive default.
+    """
+    config = {
+        "model": {"provider": "custom:cockpit-codex", "default": "gpt-5.5"},
+        "custom_providers": [
+            {
+                "name": "cockpit-codex",
+                "base_url": "http://192.168.1.108:52047/v1",
+                "api_key": "test-key",
+                "model": "gpt-5.6-sol",
+                "api_mode": "chat_completions",
+                "models": {
+                    "gpt-5.6-sol": {"context_length": 256000},
+                    "gpt-5.6-luna": {"context_length": 256000},
+                    "gpt-5.5": {"context_length": 256000},
+                },
+            }
+        ],
+    }
+    monkeypatch.setattr(rp, "load_config", lambda: config)
+    monkeypatch.setattr(rp, "_get_model_config", lambda: config["model"])
+    monkeypatch.setattr(rp, "load_pool", lambda _pool_key: SimpleNamespace(has_credentials=lambda: False))
+    monkeypatch.setattr(rp, "_getenv", lambda _name, default="": default)
+
+    resolved = rp.resolve_runtime_provider(
+        requested="custom:cockpit-codex",
+        target_model="gpt-5.6-luna",
+    )
+
+    assert resolved["provider"] == "custom"
+    assert resolved["base_url"] == "http://192.168.1.108:52047/v1"
+    assert resolved["model"] == "gpt-5.6-luna"
+
+
 def test_qwen_oauth_auto_fallthrough_on_auth_failure(monkeypatch):
     """When requested_provider is 'auto' and Qwen creds fail, fall through."""
     from hermes_cli.auth import AuthError
