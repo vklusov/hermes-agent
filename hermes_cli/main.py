@@ -11638,7 +11638,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
+        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "policy", "portal", "profile",
         "project", "proxy",
         "prompt-size",
         "resume",
@@ -13010,6 +13010,25 @@ def main():
         _register_pets_cli(pets_parser)
     except Exception as _exc:
         logging.getLogger(__name__).debug("pets CLI wiring failed: %s", _exc)
+
+    # =========================================================================
+    # policy command — read-only fleet-change policy preflight/checks
+    # =========================================================================
+    policy_parser = subparsers.add_parser(
+        "policy",
+        help="Run Hermes fleet-change policy preflight checks",
+        description=(
+            "Classify likely Hermes fleet/provider/runtime changes and verify "
+            "that a preflight record has the required gates before writes, "
+            "restarts, or deletes. This command is read-only."
+        ),
+    )
+    try:
+        from hermes_cli.policy_cmd import register_cli as _register_policy_cli
+
+        _register_policy_cli(policy_parser)
+    except Exception as _exc:
+        logging.getLogger(__name__).debug("policy CLI wiring failed: %s", _exc)
 
     # =========================================================================
     # journey command — learned skills + memories over time, in the terminal

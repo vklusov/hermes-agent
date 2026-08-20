@@ -1,0 +1,76 @@
+id: hermes-fleet-change-policy
+description: Enforce safe staged handling for Hermes fleet, provider, runtime, and configuration changes.
+applies_to:
+  keywords:
+    skill / knowledge:
+      - skill
+      - skills
+      - skill.md
+      - auto_preload
+    model/provider routing:
+      - provider
+      - providers
+      - model routing
+      - fallback
+      - route
+      - routes
+      - sonnet
+      - anymodel
+      - cockpit
+    runtime/code overlay:
+      - runtime overlay
+      - patchkit
+      - dirty worktree
+      - live checkout
+      - carried wip
+    service/runtime config:
+      - config.yaml
+      - gateway
+      - systemd
+      - launchd
+      - restart
+      - stop service
+      - bridge
+      - tailscale
+      - vpn
+    cleanup/retention:
+      - backup
+      - backups
+      - retention
+      - delete
+      - cleanup
+      - prune
+required_rollout_order:
+  - Fedor
+  - '93'
+  - Archivarius
+required_stages:
+  - classify
+  - read_only_audit
+  - proposal_and_approval
+  - backup_marker
+  - fedor_smoke
+  - mac93_smoke
+  - archivarius_smoke
+  - evidence
+  - retention
+requires_approval_for:
+  - write
+  - restart
+  - delete
+  - provider_route_change
+  - runtime_change
+before_required_fields:
+  write:
+    - approval
+    - backup_marker
+    - evidence_path
+  restart:
+    - approval
+    - backup_marker
+    - evidence_path
+  delete:
+    - approval
+    - backup_marker
+    - evidence_path
+    - retention_decision
