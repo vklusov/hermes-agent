@@ -25,7 +25,10 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Dict, List
+
+import httpx
 
 from agent.web_search_provider import WebSearchProvider
 
@@ -39,8 +42,6 @@ def _tavily_request(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     when ``TAVILY_API_KEY`` is unset; the caller catches and surfaces as
     a typed error response.
     """
-    import httpx
-
     from agent.web_search_provider import get_provider_env
 
     api_key = get_provider_env("TAVILY_API_KEY")
@@ -52,13 +53,37 @@ def _tavily_request(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
     base_url = get_provider_env("TAVILY_BASE_URL") or "https://api.tavily.com"
     payload = dict(payload)  # don't mutate caller's dict
-    payload["api_key"] = api_key
     url = f"{base_url}/{endpoint.lstrip('/')}"
     logger.info("Tavily %s request to %s", endpoint, url)
 
-    response = httpx.post(url, json=payload, timeout=60)
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": "Hermes-Agent/1.0",
+    }
+    response: httpx.Response | None = None
+    for attempt in range(3):
+        response = httpx.post(url, json=payload, headers=headers, timeout=60)
+        if not _is_tavily_edge_forbidden(response):
+            break
+        if attempt < 2:
+            time.sleep(0.25 * (attempt + 1))
+    assert response is not None
     response.raise_for_status()
     return response.json()
+
+
+def _is_tavily_edge_forbidden(response: httpx.Response) -> bool:
+    """Return True for transient Tavily edge/WAF 403 HTML responses.
+
+    Tavily's current API returns JSON for normal API errors, but its edge can
+    intermittently return a bare HTML 403 for otherwise valid Bearer-auth
+    requests. Retry only that shape so credential/quota JSON failures surface.
+    """
+    if response.status_code != 403:
+        return False
+    content_type = response.headers.get("content-type", "").lower()
+    text = response.text.lstrip().lower()
+    return "text/html" in content_type or text.startswith("<html")
 
 
 def _normalize_tavily_search_results(response: Dict[str, Any]) -> Dict[str, Any]:
@@ -163,6 +188,7 @@ class TavilyWebSearchProvider(WebSearchProvider):
                 "search",
                 {
                     "query": query,
+                    "search_depth": "basic",
                     "max_results": min(limit, 20),
                     "include_raw_content": False,
                     "include_images": False,

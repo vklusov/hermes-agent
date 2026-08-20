@@ -12,6 +12,7 @@ import os
 import asyncio
 import pytest
 from unittest.mock import patch, MagicMock
+import httpx
 
 from tests.tools.conftest import register_all_web_providers
 
@@ -29,8 +30,8 @@ class TestTavilyRequest:
             with pytest.raises(ValueError, match="TAVILY_API_KEY"):
                 _tavily_request("search", {"query": "test"})
 
-    def test_posts_with_api_key_in_body(self):
-        """api_key is injected into the JSON payload."""
+    def test_posts_with_bearer_header(self):
+        """Tavily requests use the current Bearer-auth API contract."""
         mock_response = MagicMock()
         mock_response.json.return_value = {"results": []}
         mock_response.raise_for_status = MagicMock()
@@ -43,8 +44,13 @@ class TestTavilyRequest:
                 mock_post.assert_called_once()
                 call_kwargs = mock_post.call_args
                 payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
-                assert payload["api_key"] == "tvly-test-key"
+                headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers")
+                assert isinstance(payload, dict)
+                assert isinstance(headers, dict)
+                assert "api_key" not in payload
                 assert payload["query"] == "hello"
+                assert headers["Authorization"] == "Bearer tvly-test-key"
+                assert headers["User-Agent"] == "Hermes-Agent/1.0"
                 assert "api.tavily.com/search" in call_kwargs.args[0]
 
     def test_raises_on_http_error(self):
@@ -60,6 +66,87 @@ class TestTavilyRequest:
                 from tools.web_tools import _tavily_request
                 with pytest.raises(_httpx.HTTPStatusError):
                     _tavily_request("search", {"query": "test"})
+
+
+class TestTavilyPluginRequest:
+    """Test the current plugin-backed Tavily implementation."""
+
+    def test_posts_with_bearer_header_not_api_key_body(self):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"results": []}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test-key"}):
+            with patch("plugins.web.tavily.provider.httpx.post", return_value=mock_response) as mock_post:
+                from plugins.web.tavily.provider import _tavily_request
+
+                result = _tavily_request("search", {"query": "hello"})
+
+                assert result == {"results": []}
+                mock_post.assert_called_once()
+                call_kwargs = mock_post.call_args
+                payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+                headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers")
+                assert isinstance(payload, dict)
+                assert isinstance(headers, dict)
+                assert "api_key" not in payload
+                assert payload["query"] == "hello"
+                assert headers["Authorization"] == "Bearer tvly-test-key"
+                assert headers["User-Agent"] == "Hermes-Agent/1.0"
+                assert "api.tavily.com/search" in call_kwargs.args[0]
+
+    def test_search_sets_basic_search_depth(self):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"results": []}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test-key"}):
+            with patch("plugins.web.tavily.provider.httpx.post", return_value=mock_response) as mock_post:
+                from plugins.web.tavily.provider import TavilyWebSearchProvider
+
+                result = TavilyWebSearchProvider().search("hello", limit=3)
+
+                assert result["success"] is True
+                payload = mock_post.call_args.kwargs.get("json")
+                assert payload["search_depth"] == "basic"
+                assert payload["max_results"] == 3
+
+    def test_retries_transient_html_edge_403(self):
+        forbidden = httpx.Response(
+            403,
+            headers={"content-type": "text/html"},
+            text="<html><h1>403 Forbidden</h1></html>",
+        )
+        success = MagicMock()
+        success.json.return_value = {"results": []}
+        success.raise_for_status = MagicMock()
+
+        with patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test-key"}):
+            with patch(
+                "plugins.web.tavily.provider.httpx.post",
+                side_effect=[forbidden, success],
+            ) as mock_post, patch("plugins.web.tavily.provider.time.sleep") as mock_sleep:
+                from plugins.web.tavily.provider import _tavily_request
+
+                assert _tavily_request("extract", {"urls": ["https://example.com"]}) == {"results": []}
+                assert mock_post.call_count == 2
+                mock_sleep.assert_called_once_with(0.25)
+
+    def test_does_not_retry_json_api_403(self):
+        forbidden = httpx.Response(
+            403,
+            headers={"content-type": "application/json"},
+            json={"error": "plan limit"},
+            request=httpx.Request("POST", "https://api.tavily.com/extract"),
+        )
+
+        with patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test-key"}):
+            with patch("plugins.web.tavily.provider.httpx.post", return_value=forbidden) as mock_post:
+                from plugins.web.tavily.provider import _tavily_request
+
+                with pytest.raises(httpx.HTTPStatusError):
+                    _tavily_request("extract", {"urls": ["https://example.com"]})
+                assert mock_post.call_count == 1
 
 
 # ─── _normalize_tavily_search_results ─────────────────────────────────────────
