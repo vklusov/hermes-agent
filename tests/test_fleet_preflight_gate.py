@@ -63,6 +63,37 @@ def test_fleet_read_only_audit_stays_allowed(monkeypatch):
     assert result["ok"] is True
 
 
+def test_policy_preflight_with_restart_intent_stays_read_only(monkeypatch):
+    called = False
+
+    def fake_dispatch(name, args, **_kwargs):
+        nonlocal called
+        called = True
+        return json.dumps({"ok": True, "tool": name, "args": args})
+
+    monkeypatch.delenv(PREFLIGHT_MARKER_ENV, raising=False)
+    monkeypatch.setattr(model_tools.registry, "dispatch", fake_dispatch)
+
+    result = _decode(
+        model_tools.handle_function_call(
+            "terminal",
+            {
+                "command": (
+                    "python3 -m hermes_cli.main policy preflight --intent "
+                    "'change Hermes provider routing and restart gateway' --output json"
+                )
+            },
+            user_task="Hermes fleet policy smoke",
+            skip_pre_tool_call_hook=True,
+            skip_tool_request_middleware=True,
+            skip_tool_execution_middleware=True,
+        )
+    )
+
+    assert called is True
+    assert result["ok"] is True
+
+
 def test_ordinary_non_fleet_write_stays_allowed(monkeypatch, tmp_path):
     called = False
     target = tmp_path / "note.txt"

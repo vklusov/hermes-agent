@@ -69,9 +69,23 @@ def _contains_fleet_context(text: str | None) -> bool:
     return bool(text and _FLEET_CONTEXT_RE.search(text))
 
 
+def _terminal_policy_command_is_read_only(command: str) -> bool:
+    normalized = " ".join(command.split())
+    if " policy " not in f" {normalized} ":
+        return False
+    if re.search(r"\bpolicy\s+autoload\b", normalized) and re.search(r"\s--write\b", normalized):
+        return False
+    return bool(
+        re.search(r"\bhermes(?:_cli\.main)?\s+policy\b", normalized)
+        or re.search(r"\bpython\S*\s+-m\s+hermes_cli\.main\s+policy\b", normalized)
+    )
+
+
 def _terminal_is_mutation(args: Mapping[str, Any]) -> bool:
     command = str(args.get("command") or "")
     if not command.strip():
+        return False
+    if _terminal_policy_command_is_read_only(command):
         return False
     return bool(_TERMINAL_MUTATION_RE.search(command))
 
