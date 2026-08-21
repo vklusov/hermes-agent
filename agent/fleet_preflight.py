@@ -20,6 +20,7 @@ FLEET_CONTEXT_MARKER_ENV = "HERMES_FLEET_CHANGE_CONTEXT"
 PREFLIGHT_MARKER_ENV = "HERMES_FLEET_PREFLIGHT_MARKER"
 
 _MUTATION_FILE_TOOLS = {"write_file", "patch"}
+_KNOWLEDGE_VAULT_DIR = (Path.home() / ".hermes" / "knowledge").resolve()
 _MUTATION_SERVICE_TOOLS = {"ha_call_service"}
 _READ_ONLY_TOOLS = {
     "read_file",
@@ -67,6 +68,20 @@ def _truthy(value: str | None) -> bool:
 
 def _contains_fleet_context(text: str | None) -> bool:
     return bool(text and _FLEET_CONTEXT_RE.search(text))
+
+
+def _path_is_inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _file_args_target_only_knowledge_vault(args: Mapping[str, Any]) -> bool:
+    candidates = [str(args.get(k) or "").strip() for k in ("path", "file_path")]
+    targets = [Path(value).expanduser() for value in candidates if value]
+    return bool(targets) and all(_path_is_inside(target, _KNOWLEDGE_VAULT_DIR) for target in targets)
 
 
 def _terminal_policy_command_is_read_only(command: str) -> bool:
@@ -124,6 +139,8 @@ def _classified_fleet_context(
     args: Mapping[str, Any],
     user_task: str | None,
 ) -> bool:
+    if tool_name in _MUTATION_FILE_TOOLS and _file_args_target_only_knowledge_vault(args):
+        return False
     if _truthy(os.environ.get(FLEET_CONTEXT_MARKER_ENV)):
         return True
     if _contains_fleet_context(user_task):
