@@ -4582,6 +4582,19 @@ class _BoundedCronSessionDB:
         return _bounded
 
 
+
+def _serialize_cron_fleet_approval(job: dict) -> str:
+    approval = job.get("fleet_approval")
+    if not isinstance(approval, dict) or not approval:
+        return ""
+    payload = dict(approval)
+    payload.setdefault("job_id", job.get("id"))
+    try:
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        logger.warning("Job '%s': invalid fleet_approval payload", job.get("id"), exc_info=True)
+        return ""
+
 def run_job(
     job: dict,
     *,
@@ -5039,7 +5052,10 @@ def run_job(
     # (every future job blocks on acquire_*); a leaked reader blocks all
     # future writers.  Acquire itself can't leak (it either blocks or returns).
     _cron_session_var = _VAR_MAP["HERMES_CRON_SESSION"]
+    _cron_approval_var = _VAR_MAP["HERMES_CRON_FLEET_APPROVAL"]
     _cron_session_token = None
+    _cron_approval_token = None
+    _prior_cron_job_id = os.environ.get("HERMES_CRON_JOB_ID", "_UNSET_")
     _non_dispatcher_token = None
     try:
         if not _cwd_lock_acquired:
@@ -5063,6 +5079,8 @@ def run_job(
         # which would suppress the legacy os.environ fallback used by standalone
         # cron entrypoints and tests.
         _cron_session_token = _cron_session_var.set("1")
+        _cron_approval_token = _cron_approval_var.set(_serialize_cron_fleet_approval(job))
+        os.environ["HERMES_CRON_JOB_ID"] = str(job_id)
 
         # Mark this job as NOT the dispatcher-owned kanban worker.
         #
@@ -5904,8 +5922,14 @@ def run_job(
         # clear_session_vars also clears _SESSION_CWD internally, so no
         # separate clear_session_cwd() call is needed.
         clear_session_vars(_ctx_tokens)
+        if _cron_approval_token is not None:
+            _cron_approval_var.reset(_cron_approval_token)
         if _cron_session_token is not None:
             _cron_session_var.reset(_cron_session_token)
+        if _prior_cron_job_id == "_UNSET_":
+            os.environ.pop("HERMES_CRON_JOB_ID", None)
+        else:
+            os.environ["HERMES_CRON_JOB_ID"] = _prior_cron_job_id
         if _non_dispatcher_token is not None:
             exit_non_dispatcher_owned_context(_non_dispatcher_token)
         for _var_name in _cron_delivery_vars:

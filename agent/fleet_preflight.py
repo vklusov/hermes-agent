@@ -9,6 +9,7 @@ using the existing tool-specific guards.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
@@ -18,6 +19,7 @@ from typing import Any, Mapping
 
 FLEET_CONTEXT_MARKER_ENV = "HERMES_FLEET_CHANGE_CONTEXT"
 PREFLIGHT_MARKER_ENV = "HERMES_FLEET_PREFLIGHT_MARKER"
+CRON_FLEET_APPROVAL_ENV = "HERMES_CRON_FLEET_APPROVAL"
 
 _MUTATION_FILE_TOOLS = {"write_file", "patch"}
 _KNOWLEDGE_VAULT_DIR = (Path.home() / ".hermes" / "knowledge").resolve()
@@ -84,6 +86,91 @@ def _file_args_target_only_knowledge_vault(args: Mapping[str, Any]) -> bool:
     return bool(targets) and all(_path_is_inside(target, _KNOWLEDGE_VAULT_DIR) for target in targets)
 
 
+def _shell_words(command: str) -> list[str]:
+    try:
+        import shlex
+
+        return shlex.split(command)
+    except Exception:
+        return command.split()
+
+
+def _strip_safe_prefix(words: list[str]) -> list[str]:
+    remaining = list(words)
+    while remaining:
+        head = remaining[0]
+        if "=" in head and not head.startswith("-"):
+            key = head.split("=", 1)[0]
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                remaining.pop(0)
+                continue
+        if head in {"env", "command"}:
+            remaining.pop(0)
+            continue
+        break
+    return remaining
+
+
+def _split_ssh_remote_words(words: list[str]) -> list[str] | None:
+    if not words or words[0] != "ssh":
+        return None
+    i = 1
+    while i < len(words):
+        token = words[i]
+        if token == "--":
+            i += 1
+            break
+        if token.startswith("-"):
+            i += 1
+            if token in {"-i", "-F", "-J", "-l", "-o", "-p"} and i < len(words):
+                i += 1
+            continue
+        i += 1  # host
+        break
+    return words[i:] if i <= len(words) else []
+
+
+def _trim_cd_prefix(words: list[str]) -> list[str]:
+    if len(words) >= 4 and words[0] == "cd" and words[2] in {"&&", ";"}:
+        return words[3:]
+    return words
+
+
+def _terminal_read_only_audit_command(command: str) -> bool:
+    words = _strip_safe_prefix(_shell_words(command))
+    remote = _split_ssh_remote_words(words)
+    if remote is not None:
+        words = remote
+    words = _strip_safe_prefix(_trim_cd_prefix(words))
+    if not words:
+        return False
+    if words[0] == "git" and len(words) >= 2:
+        sub = words[1]
+        if sub in {"rev-parse", "rev-list", "log", "show", "branch", "remote"}:
+            return True
+        if sub == "diff":
+            return True
+        if sub == "status":
+            return "GIT_OPTIONAL_LOCKS=0" in command or "--no-optional-locks" in words
+        return False
+    if words[0] == "curl":
+        lowered = [w.lower() for w in words]
+        if any(w in lowered for w in ["-x", "--request"]):
+            try:
+                method = lowered[lowered.index("-x") + 1].upper()
+            except Exception:
+                try:
+                    method = lowered[lowered.index("--request") + 1].upper()
+                except Exception:
+                    return False
+            if method not in {"GET", "HEAD"}:
+                return False
+        if any(w in lowered for w in ["-d", "--data", "--data-raw", "--data-binary", "--form", "-f", "--upload-file"]):
+            return False
+        return any(part in command for part in ["/health", "/status", "/ready", "/live"])
+    return False
+
+
 def _terminal_policy_command_is_read_only(command: str) -> bool:
     normalized = " ".join(command.split())
     if " policy " not in f" {normalized} ":
@@ -101,6 +188,8 @@ def _terminal_is_mutation(args: Mapping[str, Any]) -> bool:
     if not command.strip():
         return False
     if _terminal_policy_command_is_read_only(command):
+        return False
+    if _terminal_read_only_audit_command(command):
         return False
     return bool(_TERMINAL_MUTATION_RE.search(command))
 
@@ -123,6 +212,68 @@ def _load_marker(path: str) -> dict[str, Any] | None:
         return None
     return data if isinstance(data, dict) else None
 
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _cron_approval_from_context() -> Mapping[str, Any] | None:
+    try:
+        from gateway.session_context import get_session_env
+
+        raw = get_session_env(CRON_FLEET_APPROVAL_ENV, "")
+    except Exception:
+        raw = os.environ.get(CRON_FLEET_APPROVAL_ENV, "")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return None
+    return data if isinstance(data, Mapping) else None
+
+
+def _cron_approval_valid(data: Mapping[str, Any] | None, tool_name: str, args: Mapping[str, Any]) -> bool:
+    if not data:
+        return False
+    expires_at = _parse_iso_datetime(str(data.get("expires_at") or ""))
+    if not expires_at or expires_at <= datetime.now(timezone.utc):
+        return False
+    if str(data.get("job_id") or "") != str(os.environ.get("HERMES_CRON_JOB_ID") or ""):
+        return False
+    if tool_name != "terminal":
+        return False
+    command = str(args.get("command") or "")
+    allowed_actions = {str(a).strip().lower() for a in data.get("allowed_actions") or []}
+    if not allowed_actions:
+        return False
+    if "git_fetch" in allowed_actions and re.search(r"\bgit\s+fetch\b", command):
+        pass
+    elif "git_pull_ff_only" in allowed_actions and re.search(r"\bgit\s+pull\s+--ff-only\b", command):
+        pass
+    elif "install_editable" in allowed_actions and re.search(r"\buv\s+pip\s+install\s+-e\b|\bpip\s+install\s+-e\b", command):
+        pass
+    else:
+        return False
+    scopes = data.get("scopes") or {}
+    hosts = [str(h) for h in scopes.get("hosts") or []]
+    repos = [str(r) for r in scopes.get("repos") or []]
+    if hosts and not any(host in command for host in hosts):
+        return False
+    if repos and not any(repo in command for repo in repos):
+        return False
+    return all(bool(str(data.get(k) or "").strip()) for k in ("approval", "evidence_target"))
 
 def _marker_valid(data: Mapping[str, Any] | None) -> bool:
     if not data:
@@ -181,7 +332,7 @@ def check_fleet_preflight(
 
     marker_path = str(os.environ.get(PREFLIGHT_MARKER_ENV) or "").strip()
     marker_data = _load_marker(marker_path) if marker_path else None
-    if _marker_valid(marker_data):
+    if _marker_valid(marker_data) or _cron_approval_valid(_cron_approval_from_context(), tool_name, normalized_args):
         return FleetPreflightDecision(
             blocked=False,
             classified=True,

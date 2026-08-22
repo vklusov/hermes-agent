@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 import json
 
 import model_tools
@@ -239,3 +240,108 @@ def test_valid_preflight_marker_allows_fleet_mutation(monkeypatch, tmp_path):
 
     assert called is True
     assert result["ok"] is True
+
+
+
+def test_read_only_ssh_git_audit_allowed_without_marker(monkeypatch):
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.delenv("HERMES_FLEET_CHANGE_CONTEXT", raising=False)
+
+    decision = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {
+            "command": "ssh fedor cd /srv/hermes && GIT_OPTIONAL_LOCKS=0 git status --short --branch"
+        },
+        user_task="daily remote Hermes update audit",
+    )
+
+    assert decision.blocked is False
+    assert decision.classified is True
+    assert decision.mutation is False
+
+
+def test_git_pull_still_blocked_without_cron_approval(monkeypatch):
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.delenv("HERMES_FLEET_CHANGE_CONTEXT", raising=False)
+    monkeypatch.delenv("HERMES_CRON_FLEET_APPROVAL", raising=False)
+    monkeypatch.delenv("HERMES_CRON_JOB_ID", raising=False)
+
+    decision = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {"command": "ssh fedor cd /srv/hermes && git pull --ff-only"},
+        user_task="daily remote Hermes update",
+    )
+
+    assert decision.blocked is True
+    assert decision.classified is True
+    assert decision.mutation is True
+
+
+def test_scoped_cron_approval_allows_only_matching_pull(monkeypatch):
+    approval = {
+        "job_id": "af5d2a9913d1",
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "allowed_actions": ["git_pull_ff_only"],
+        "scopes": {"hosts": ["fedor"], "repos": ["/srv/hermes"]},
+        "approval": "operator approved daily remote update",
+        "evidence_target": "/home/wwolfy/.hermes/fleet/releases/cron/evidence.md",
+    }
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.setenv("HERMES_CRON_JOB_ID", "af5d2a9913d1")
+    monkeypatch.setenv("HERMES_CRON_FLEET_APPROVAL", json.dumps(approval))
+
+    allowed = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {"command": "ssh fedor cd /srv/hermes && git pull --ff-only"},
+        user_task="daily remote Hermes update",
+    )
+    denied_host = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {"command": "ssh mac93 cd /srv/hermes && git pull --ff-only"},
+        user_task="daily remote Hermes update",
+    )
+    denied_action = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {"command": "ssh fedor cd /srv/hermes && systemctl --user restart hermes-gateway.service"},
+        user_task="daily remote Hermes update",
+    )
+
+    assert allowed.blocked is False
+    assert denied_host.blocked is True
+    assert denied_action.blocked is True
+
+
+def test_expired_cron_approval_blocks_mutation(monkeypatch):
+    approval = {
+        "job_id": "af5d2a9913d1",
+        "expires_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+        "allowed_actions": ["git_pull_ff_only"],
+        "scopes": {"hosts": ["fedor"], "repos": ["/srv/hermes"]},
+        "approval": "operator approved daily remote update",
+        "evidence_target": "/home/wwolfy/.hermes/fleet/releases/cron/evidence.md",
+    }
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.setenv("HERMES_CRON_JOB_ID", "af5d2a9913d1")
+    monkeypatch.setenv("HERMES_CRON_FLEET_APPROVAL", json.dumps(approval))
+
+    decision = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {"command": "ssh fedor cd /srv/hermes && git pull --ff-only"},
+        user_task="daily remote Hermes update",
+    )
+
+    assert decision.blocked is True
+
+
+
+def test_session_context_cron_fleet_approval_is_task_local(monkeypatch):
+    from gateway.session_context import clear_session_vars, get_session_env, set_session_vars
+
+    approval = json.dumps({"job_id": "job-a"})
+    monkeypatch.setenv("HERMES_CRON_FLEET_APPROVAL", "ambient")
+    tokens = set_session_vars(cron_fleet_approval=approval)
+    try:
+        assert get_session_env("HERMES_CRON_FLEET_APPROVAL") == approval
+    finally:
+        clear_session_vars(tokens)
+    assert get_session_env("HERMES_CRON_FLEET_APPROVAL") == ""
