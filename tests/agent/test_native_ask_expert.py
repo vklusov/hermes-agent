@@ -29,7 +29,7 @@ def test_native_ask_expert_activation_exposes_core_tool():
     assert activation is not None
     assert activation.name == "ask-expert"
     assert activation.mode == "tool"
-    assert "custom:anymodel/claude-sonnet-5" in activation.detail
+    assert "custom:anymodel/cc/claude-sonnet-5" in activation.detail
 
     tool_defs = get_tool_definitions(
         enabled_toolsets=["hermes-cli"],

@@ -1,4 +1,4 @@
-"""Native advisory expert tool backed by AnyModel Sonnet."""
+"""Native advisory expert tool backed by AnyModel Cockpit Claude Sonnet."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from quota.expert_quota import can_call_expert, register_expert_call
 from tools.registry import registry
 
 EXPERT_PROVIDER = "custom:anymodel"
-EXPERT_MODEL = "claude-sonnet-5"
+EXPERT_MODEL = "cc/claude-sonnet-5"
 EXPERT_ROUTE_LABEL = f"{EXPERT_PROVIDER}/{EXPERT_MODEL}"
 
 
@@ -141,7 +141,7 @@ ASK_EXPERT_SCHEMA = {
     "name": "ask_expert",
     "description": (
         "Ask the configured expert model for advisory-only technical review. "
-        "Routes explicitly to custom:anymodel / claude-sonnet-5."
+        "Routes explicitly to custom:anymodel / cc/claude-sonnet-5."
     ),
     "parameters": {
         "type": "object",
@@ -160,6 +160,6 @@ registry.register(
     toolset="hermes-ask-expert",
     schema=ASK_EXPERT_SCHEMA,
     handler=_handle_ask_expert,
-    description="Ask AnyModel Sonnet for advisory-only expert review.",
+    description="Ask AnyModel Cockpit Claude Sonnet for advisory-only expert review.",
     emoji="",
 )

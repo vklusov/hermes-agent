@@ -42,7 +42,7 @@ def test_tool_is_registered_for_native_skill_startup():
     assert entry.schema["parameters"]["properties"]["task"]["type"] == "string"
 
 
-def test_ask_expert_routes_only_to_anymodel_sonnet(monkeypatch):
+def test_ask_expert_routes_only_to_anymodel_cockpit_sonnet(monkeypatch):
     import tools.ask_expert as ask_expert_module
 
     monkeypatch.setattr(ask_expert_module, "should_call_expert", lambda task, context: True)
@@ -71,7 +71,7 @@ def test_ask_expert_routes_only_to_anymodel_sonnet(monkeypatch):
 
     assert result == "sonnet advice"
     assert captured["provider"] == "custom:anymodel"
-    assert captured["model"] == "claude-sonnet-5"
+    assert captured["model"] == "cc/claude-sonnet-5"
     assert captured["provider"] not in {"auto", "anthropic", "custom:neurogate", "custom:cockpit-claude"}
     assert captured["model"] != "gpt-5.5"
     assert [message["role"] for message in captured["messages"]] == ["system", "user"]

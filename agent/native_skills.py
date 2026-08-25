@@ -33,7 +33,7 @@ _NATIVE_SKILLS = {
     "ask-expert": {
         "module": "tools.ask_expert",
         "mode": "tool",
-        "detail": "ask_expert route=custom:anymodel/claude-sonnet-5",
+        "detail": "ask_expert route=custom:anymodel/cc/claude-sonnet-5",
     },
 }
 
