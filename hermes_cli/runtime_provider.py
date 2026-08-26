@@ -208,7 +208,8 @@ def _configured_or_fallback_api_mode(provider: str, model_cfg: Dict[str, Any], b
     ``opencode_by_model``) their mode is always re-derived from the effective model."""
     if opencode_by_model and _models.opencode_provider_family(provider) is not None:
         return _models.opencode_model_api_mode(provider, effective_model)
-    return _configured_api_mode(provider, model_cfg) or _fallback_api_mode(provider, base_url, effective_model)
+    profile_mode = _provider_profile_model_api_mode(provider, effective_model)
+    return profile_mode or _configured_api_mode(provider, model_cfg) or _fallback_api_mode(provider, base_url, effective_model)
 
 
 def _api_key_provider_api_mode(provider: str, model_cfg: Dict[str, Any], api_key: str, base_url: str, effective_model: Any, *,
@@ -231,6 +232,22 @@ def _maybe_apply_codex_app_server_runtime(*, provider: str, api_mode: str, model
     if model_cfg and provider in {"openai", "openai-codex"} and str(model_cfg.get("openai_runtime") or "").strip().lower() == "codex_app_server":
         return "codex_app_server"
     return api_mode
+
+
+def _provider_profile_model_api_mode(provider: str, model: Any) -> Optional[str]:
+    """Return a provider-profile per-model api_mode override, if declared."""
+    provider_name = (provider or "").strip().lower()
+    model_name = str(model or "").strip()
+    if not provider_name or not model_name:
+        return None
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(provider_name)
+        get_mode = getattr(profile, "get_model_api_mode", None) if profile is not None else None
+        return _parse_api_mode(get_mode(model_name)) if callable(get_mode) else None
+    except Exception:
+        return None
 
 
 # ── base_url / credential helpers ──────────────────────────────────────────────────────────
