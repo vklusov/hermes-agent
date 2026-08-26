@@ -163,6 +163,9 @@ def _match_legacy_custom_provider(requested_norm: str, custom_providers) -> Opti
         model_name = _clean(entry.get("model", ""))
         if model_name:
             result["model"] = model_name
+        models = entry.get("models")
+        if isinstance(models, (dict, list)):
+            result["models"] = models
         _lift_common_custom_fields(entry, result, provider_key=provider_key, key_env=_clean(entry.get("key_env", "")),
                                    api_mode=_rp()._parse_api_mode(entry.get("api_mode")))
         return result
@@ -367,12 +370,40 @@ def _custom_provider_request_overrides(custom_provider: Dict[str, Any]) -> Dict[
     return {"extra_body": dict(extra_body)}
 
 
+def _custom_provider_serves_model(custom_provider: Dict[str, Any], model: Optional[str]) -> bool:
+    """True when a named custom provider advertises or implicitly accepts ``model``."""
+    target = str(model or "").strip().lower()
+    if not target:
+        return False
+    models = custom_provider.get("models")
+    if not isinstance(models, (dict, list)):
+        return True
+    for key in ("model", "default_model"):
+        value = custom_provider.get(key)
+        if isinstance(value, str) and value.strip().lower() == target:
+            return True
+    if isinstance(models, dict):
+        return any(str(mid).strip().lower() == target for mid in models)
+    for item in models:
+        candidate = (item.get("id") or item.get("name")) if isinstance(item, dict) else item
+        if isinstance(candidate, str) and candidate.strip().lower() == target:
+            return True
+    return False
+
+
+def _custom_provider_effective_model(custom_provider: Dict[str, Any], target_model: Optional[str]) -> str:
+    """Target model wins only when this provider can serve it; otherwise use its default."""
+    if _custom_provider_serves_model(custom_provider, target_model):
+        return str(target_model or "").strip()
+    return str(custom_provider.get("model") or custom_provider.get("default_model") or "").strip()
+
+
 def _apply_custom_provider_extras(custom_provider: Dict[str, Any], target_model: Optional[str], result: Dict[str, Any]) -> None:
     """Copy model / capabilities / max_output_tokens / extra_headers / request_overrides onto a
     resolved custom runtime. An explicit ``target_model`` wins over the provider's configured
     default (auxiliary slots / background-review resolve a concrete model and must not fall back to
     ``default_model``). ``extra_headers`` may carry credentials — NEVER log them."""
-    model_name = target_model or custom_provider.get("model")
+    model_name = _custom_provider_effective_model(custom_provider, target_model)
     if model_name:
         result["model"] = model_name
     _lift_model_capabilities(custom_provider, model_name, result)
@@ -487,6 +518,10 @@ def _resolve_named_custom_runtime(*, requested_provider: str, explicit_api_key: 
     )
     if pool_result:
         # The pool doesn't know the custom_providers fields — propagate them here too.
+        model_for_mode = target_model or custom_provider.get("model") or rp._get_model_config().get("default")
+        profile_mode = rp._provider_profile_model_api_mode(str(custom_provider.get("name") or requested_provider), model_for_mode)
+        if profile_mode:
+            pool_result["api_mode"] = profile_mode
         _apply_custom_provider_extras(custom_provider, target_model, pool_result)
         return pool_result
     explicit_key = (explicit_api_key or "").strip()
@@ -506,7 +541,9 @@ def _resolve_named_custom_runtime(*, requested_provider: str, explicit_api_key: 
         token_provider = build_command_token_provider(key_cmd, str(custom_provider.get("name", requested_provider) or "custom"))
         if token_provider is not None:
             api_key = token_provider
-    result = _custom_runtime(rp, base_url, api_key, custom_provider.get("api_mode"),
+    model_for_mode = target_model or custom_provider.get("model") or rp._get_model_config().get("default")
+    profile_mode = rp._provider_profile_model_api_mode(str(custom_provider.get("name") or requested_provider), model_for_mode)
+    result = _custom_runtime(rp, base_url, api_key, profile_mode or custom_provider.get("api_mode"),
                              source=f"custom_provider:{custom_provider.get('name', requested_provider)}",
                              requested_provider=requested_provider)
     _apply_custom_provider_extras(custom_provider, target_model, result)
