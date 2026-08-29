@@ -5294,6 +5294,61 @@ def _preflight_job_config(job: dict, cfg: dict) -> Optional[str]:
     return None
 
 
+def _activate_cron_native_skills(job: dict) -> None:
+    """Activate executable native skills attached to a cron job.
+
+    Cron prompt assembly already injects SKILL.md text, but native skills also
+    need their Python bootstrap/import side effects before ``AIAgent`` builds
+    the tool schema. Without this hook a job can mention a native skill in the
+    prompt while the corresponding tool never registers (for example
+    ``ask-expert`` -> ``tools.ask_expert`` -> ``hermes-ask-expert``).
+
+    Activation is intentionally fail-open for non-native/missing skills: prompt
+    skill loading and preflight readiness keep their existing behavior, while a
+    broken native import is logged and lets the agent report the unavailable
+    tool instead of crashing the scheduler.
+    """
+
+    skills = job.get("skills")
+    if skills is None:
+        legacy = job.get("skill")
+        skills = [legacy] if legacy else []
+    elif isinstance(skills, str):
+        skills = [skills]
+
+    skill_names = [str(name).strip() for name in skills if str(name).strip()]
+    if not skill_names:
+        return
+
+    try:
+        from agent.native_skills import (
+            activate_auto_preloaded_native_skills,
+            format_native_skill_log,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Job '%s': native skill activation unavailable (non-fatal): %s",
+            job.get("id", "?"), exc,
+        )
+        return
+
+    try:
+        activations = activate_auto_preloaded_native_skills(skill_names)
+    except Exception as exc:
+        logger.warning(
+            "Job '%s': native skill activation failed (non-fatal): %s",
+            job.get("id", "?"), exc,
+        )
+        return
+
+    if activations:
+        logger.info(
+            "Job '%s': native_skill_loaded source=cron skills=%s",
+            job.get("id", "?"),
+            format_native_skill_log(activations),
+        )
+
+
 def _cron_cleanup_timeout_seconds() -> float:
     """Return the wall-clock bound for cron post-run cleanup."""
     default = 10.0
@@ -6326,6 +6381,12 @@ def run_job(
                     )
             except Exception as e:
                 logger.debug("Job '%s': failed to load credential pool for %s: %s", job_id, runtime_provider, e)
+
+        # Activate executable native skills before AIAgent snapshots the tool
+        # registry / tool definitions. Prompt-only skill injection happened in
+        # _build_job_prompt(); this hook is for skill-backed Python modules such
+        # as ask-expert whose import registers an additional toolset.
+        _activate_cron_native_skills(job)
 
         # Initialize MCP servers so configured mcp_servers are available to
         # the agent's tool registry before AIAgent is constructed. Without
