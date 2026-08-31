@@ -55,6 +55,8 @@ def should_call_expert(task: str, context_summary: str) -> bool:
     combined = f"{_normalize(task)} {_normalize(context_summary)}".strip()
     if not combined:
         return False
+    if _contains_any(combined, _EXPERT_KEYWORDS):
+        return True
     if _contains_any(combined, _ROUTINE_KEYWORDS):
         return False
-    return _contains_any(combined, _EXPERT_KEYWORDS)
+    return False
