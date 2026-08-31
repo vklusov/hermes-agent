@@ -81,6 +81,24 @@ def test_ask_expert_routes_only_to_anymodel_cockpit_sonnet(monkeypatch):
     assert "full conversation" not in prompt.lower()
 
 
+def test_policy_allows_expert_topics_even_with_routine_words():
+    from policy.expert_policy import should_call_expert
+
+    task = (
+        "Design automation architecture for Hermes fleet maintenance. "
+        "Include implementation patterns, alert templates, rollout tradeoffs, "
+        "and production incident failure modes."
+    )
+
+    assert should_call_expert(task, "") is True
+
+
+def test_policy_still_rejects_routine_only_tasks():
+    from policy.expert_policy import should_call_expert
+
+    assert should_call_expert("Translate and format this short template", "") is False
+
+
 def test_ask_expert_blocks_when_policy_rejects(monkeypatch):
     import tools.ask_expert as ask_expert_module
 
