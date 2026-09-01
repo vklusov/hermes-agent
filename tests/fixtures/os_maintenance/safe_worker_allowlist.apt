@@ -1,0 +1,4 @@
+Inst tzdata [2025a-0ubuntu0.24.04] (2025b-0ubuntu0.24.04 Ubuntu:24.04/noble-updates [all])
+Inst ca-certificates [20240203] (20240203ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [all])
+Conf tzdata (2025b-0ubuntu0.24.04 Ubuntu:24.04/noble-updates [all])
+Conf ca-certificates (20240203ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [all])

@@ -1,0 +1,3 @@
+Inst openssh-server [1:9.6p1-3ubuntu13.5] (1:9.6p1-3ubuntu13.8 Ubuntu:24.04/noble-security [amd64])
+Inst tailscale [1.80.0] (1.82.0 Tailscale:stable [amd64])
+Inst docker-ce [5:27.5.1] (5:28.0.0 Docker:stable [amd64])
