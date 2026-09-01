@@ -35,4 +35,13 @@ def build_backup_parser(subparsers, *, cmd_backup: Callable) -> None:
     backup_parser.add_argument(
         "-l", "--label", help="Label for the snapshot (only used with --quick)"
     )
+    backup_parser.add_argument(
+        "--retention-report",
+        action="store_true",
+        help="Dry-run backup retention inventory and freshness report (no deletion)",
+    )
+    backup_parser.add_argument(
+        "--retention-policy",
+        help="Path to a backup retention policy YAML file (default: bundled proposed policy)",
+    )
     backup_parser.set_defaults(func=cmd_backup)

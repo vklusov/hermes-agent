@@ -6005,7 +6005,19 @@ def cmd_skin(args):
 
 def cmd_backup(args):
     """Back up Hermes home directory to a zip file."""
-    if getattr(args, "quick", False):
+    if getattr(args, "retention_report", False):
+        from pathlib import Path
+
+        from hermes_cli.backup_retention import (
+            format_retention_report,
+            load_retention_policy,
+            verify_backup_retention,
+        )
+
+        policy_path = getattr(args, "retention_policy", None)
+        policy = load_retention_policy(Path(policy_path)) if policy_path else load_retention_policy()
+        print(format_retention_report(verify_backup_retention(policy)))
+    elif getattr(args, "quick", False):
         from hermes_cli.backup import run_quick_backup
 
         run_quick_backup(args)

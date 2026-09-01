@@ -1,0 +1,96 @@
+# Proposed Hermes backup retention policy.
+#
+# This file is advisory until explicitly approved by the operator. Verifiers
+# may read it and report risk, but deletion/pruning remains Tier C and must not
+# happen automatically from this policy.
+schema_version: 1
+policy_status: proposed
+safety:
+  deletion_tier: C
+  deletion_default: never
+  deletion_requires_operator_approval: true
+  protect_release_evidence: true
+  redact_secrets: true
+  report_mode_default: dry_run
+retention_defaults:
+  daily: 7
+  weekly: 4
+  monthly: 6
+classes:
+  manual_full_backup:
+    description: Manual full archives created by `hermes backup`.
+    type: zip
+    patterns:
+      - "~/hermes-backup-*.zip"
+    required: false
+    max_staleness_days: 90
+    max_item_bytes: 21474836480
+    retention:
+      daily: 7
+      weekly: 4
+      monthly: 6
+    deletion_tier: C
+  pre_update_backup:
+    description: Automatic full archives created before `hermes update`.
+    type: zip
+    patterns:
+      - "$HERMES_HOME/backups/pre-update-*.zip"
+    required: false
+    max_staleness_days: 30
+    max_item_bytes: 21474836480
+    retention:
+      daily: 7
+      weekly: 4
+      monthly: 3
+    deletion_tier: C
+  pre_migration_backup:
+    description: Automatic full archives created before `hermes claw migrate`.
+    type: zip
+    patterns:
+      - "$HERMES_HOME/backups/pre-migration-*.zip"
+    required: false
+    max_staleness_days: 90
+    max_item_bytes: 21474836480
+    retention:
+      daily: 7
+      weekly: 4
+      monthly: 3
+    deletion_tier: C
+  quick_state_snapshot:
+    description: Critical state snapshots created by `hermes backup --quick`, `/snapshot`, and pre-update quick safety snapshots.
+    type: snapshot_dir
+    patterns:
+      - "$HERMES_HOME/state-snapshots/*"
+      - "$HERMES_HOME/profiles/*/state-snapshots/*"
+    required: false
+    max_staleness_days: 30
+    max_item_bytes: 5368709120
+    retention:
+      daily: 7
+      weekly: 4
+      monthly: 3
+    deletion_tier: C
+  release_evidence:
+    description: Fleet rollout evidence and audit records. Never pruned by backup retention.
+    type: evidence_dir
+    patterns:
+      - "$HERMES_HOME/fleet/releases/*"
+    required: false
+    retention:
+      daily: null
+      weekly: null
+      monthly: null
+      evidence_exception: keep_forever
+    deletion_tier: C
+    prune_exempt: true
+  kanban_task_artifacts:
+    description: Kanban task attachments and board artifacts. Inventory only; never pruned by backup retention.
+    type: evidence_dir
+    patterns:
+      - "$HERMES_HOME/kanban/boards/*/attachments/*"
+      - "$HERMES_HOME/kanban/boards/*/workspaces/*"
+    required: false
+    retention:
+      evidence_exception: keep_until_board_archival_policy
+    deletion_tier: C
+    prune_exempt: true
