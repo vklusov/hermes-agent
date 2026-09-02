@@ -137,3 +137,85 @@ def test_dry_run_writes_plan_without_creating_scratch_clone(tmp_path: Path):
     assert report["status"] == "BLOCKED"
     assert report["dry_run"] is True
     assert not (scratch / "dryrun" / "clone").exists()
+
+
+def test_rehearsal_fetches_target_from_live_upstream_after_local_merge(tmp_path: Path):
+    live, remote, local_commit = _make_repo(tmp_path)
+    scratch = tmp_path / "scratch"
+    releases = tmp_path / "releases"
+
+    _git(live, "fetch", "origin", "main")
+    _git(live, "merge", "--no-ff", "--no-edit", "FETCH_HEAD")
+
+    upstream = tmp_path / "upstream"
+    subprocess.run(["git", "clone", "-q", "--branch", "main", str(remote), str(upstream)], check=True)
+    _git(upstream, "config", "user.email", "test@example.com")
+    _git(upstream, "config", "user.name", "Test User")
+    newer_head = _commit(upstream, "newer.txt", "newer\n", "newer upstream change")
+    _git(upstream, "push", "-q", "origin", "HEAD:main")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(live),
+            "--scratch-root",
+            str(scratch),
+            "--release-root",
+            str(releases),
+            "--release-name",
+            "post-local-merge",
+            "--skip-tests",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    report = json.loads((releases / "post-local-merge" / "readiness.json").read_text(encoding="utf-8"))
+    assert result.returncode == 0
+    assert report["target_head"] == newer_head
+    assert report["live_checkout_modified"] is False
+    assert local_commit in report["carried_commits"]
+
+
+def test_rehearsal_reports_blocked_when_target_cannot_be_discovered(tmp_path: Path):
+    live = tmp_path / "live"
+    subprocess.run(["git", "init", "-q", str(live)], check=True)
+    _git(live, "config", "user.email", "test@example.com")
+    _git(live, "config", "user.name", "Test User")
+    _commit(live, "README.md", "base\n", "base")
+    _git(live, "remote", "add", "origin", str(tmp_path / "missing.git"))
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(live),
+            "--scratch-root",
+            str(tmp_path / "scratch"),
+            "--release-root",
+            str(tmp_path / "releases"),
+            "--release-name",
+            "no-target",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    report = json.loads((tmp_path / "releases" / "no-target" / "readiness.json").read_text(encoding="utf-8"))
+    assert result.returncode == 0
+    assert report["status"] == "BLOCKED"
+    assert report["target_head"] == ""
+    assert report["tests"] == [
+        {
+            "name": "target discovery",
+            "status": "FAIL",
+            "command": "git ls-remote origin refs/heads/main || git rev-parse @{u}",
+            "returncode": 1,
+        }
+    ]
+    assert report["live_checkout_modified"] is False
