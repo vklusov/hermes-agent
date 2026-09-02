@@ -89,6 +89,38 @@ def _git_text(rec: Recorder, repo: Path, *args: str, check: bool = True) -> str:
     return _git(rec, repo, *args, check=check).stdout.strip()
 
 
+def _remote_url(rec: Recorder, repo: Path, remote: str = "origin") -> str:
+    """Return the configured URL for *remote*, or an empty string if absent."""
+    return _git_text(rec, repo, "remote", "get-url", remote, check=False).strip()
+
+
+def _object_exists(rec: Recorder, repo: Path, revision: str) -> bool:
+    if not revision:
+        return False
+    return _git(rec, repo, "cat-file", "-e", f"{revision}^{{commit}}", check=False).returncode == 0
+
+
+def _carried_commits_between(rec: Recorder, repo: Path, target_head: str, before_head: str) -> list[str]:
+    """Return local commits from *before_head* that are not present in *target_head*.
+
+    This must run in a repository that has both objects. The live checkout may
+    know a target only from ``ls-remote`` without having fetched it locally, so
+    the authoritative calculation happens in the scratch clone after fetching
+    the upstream target object.
+    """
+    if not _object_exists(rec, repo, before_head) or not _object_exists(rec, repo, target_head):
+        return []
+    cherry = _git_text(rec, repo, "cherry", "-v", target_head, before_head, check=False)
+    commits = [line.split()[1] for line in cherry.splitlines() if line.startswith("+ ")]
+    if commits:
+        return commits
+    merge_base = _git_text(rec, repo, "merge-base", before_head, target_head, check=False)
+    if not merge_base:
+        return []
+    revs = _git_text(rec, repo, "rev-list", "--reverse", "--no-merges", f"{merge_base}..{before_head}", check=False)
+    return [line for line in revs.splitlines() if line.strip()]
+
+
 def _safe_release_name() -> str:
     return time.strftime("vm-hermes-rehearsal-%Y%m%dT%H%M%SZ", time.gmtime())
 
@@ -219,8 +251,23 @@ def run(args: argparse.Namespace) -> int:
     elif head_ref:
         target_head = head_ref.split()[0]
     else:
-        target_head = _git_text(rec, repo, "rev-parse", "@{u}")
+        target_head = _git_text(rec, repo, "rev-parse", "@{u}", check=False)
     report["target_head"] = target_head
+    if not target_head:
+        report["tests"].append(
+            {
+                "name": "target discovery",
+                "status": "FAIL",
+                "command": "git ls-remote origin refs/heads/main || git rev-parse @{u}",
+                "returncode": 1,
+            }
+        )
+        after_head = _git_text(rec, repo, "rev-parse", "HEAD")
+        after_status = _git_text(rec, repo, "status", "--short", "--branch")
+        report["live_checkout_modified"] = after_head != before_head or after_status != before_status
+        _write_reports(report, release_dir)
+        rec.save()
+        return 0
     if not report["carried_commits"] and before_head != target_head:
         merge_base = _git_text(rec, repo, "merge-base", before_head, target_head, check=False)
         if merge_base:
@@ -247,8 +294,14 @@ def run(args: argparse.Namespace) -> int:
     scratch_dir.mkdir(parents=True, exist_ok=True)
     rec.command(scratch_dir, "git", "clone", "--no-checkout", str(repo), str(scratch_repo))
     _git(rec, scratch_repo, "fetch", "origin", "+refs/heads/*:refs/remotes/origin/*")
+    upstream_url = _remote_url(rec, repo, "origin")
+    if upstream_url:
+        _git(rec, scratch_repo, "fetch", upstream_url, target_head, check=False)
     _git(rec, scratch_repo, "config", "user.email", "hermes-rehearsal@example.invalid")
     _git(rec, scratch_repo, "config", "user.name", "Hermes Update Rehearsal")
+    scratch_carried = _carried_commits_between(rec, scratch_repo, target_head, before_head)
+    if scratch_carried:
+        report["carried_commits"] = scratch_carried
     _git(rec, scratch_repo, "checkout", "-B", "update-rehearsal", target_head)
 
     for commit in report["carried_commits"]:
