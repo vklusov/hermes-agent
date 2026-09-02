@@ -219,3 +219,41 @@ def test_rehearsal_reports_blocked_when_target_cannot_be_discovered(tmp_path: Pa
         }
     ]
     assert report["live_checkout_modified"] is False
+
+
+def test_rehearsal_does_not_replay_when_target_already_merged(tmp_path: Path):
+    live, remote, local_commit = _make_repo(tmp_path)
+    scratch = tmp_path / "scratch"
+    releases = tmp_path / "releases"
+
+    _git(live, "fetch", "origin", "main")
+    _git(live, "merge", "--no-ff", "--no-edit", "FETCH_HEAD")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(live),
+            "--scratch-root",
+            str(scratch),
+            "--release-root",
+            str(releases),
+            "--release-name",
+            "already-merged",
+            "--skip-tests",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    report = json.loads((releases / "already-merged" / "readiness.json").read_text(encoding="utf-8"))
+    log = (releases / "already-merged" / "dry-run.log").read_text(encoding="utf-8")
+    assert result.returncode == 0
+    assert report["status"] == "READY"
+    assert report["conflicts"] == []
+    assert report["carried_commits"] == []
+    assert report["live_checkout_modified"] is False
+    assert "already contained in live HEAD" in log
+    assert local_commit not in report["carried_commits"]
