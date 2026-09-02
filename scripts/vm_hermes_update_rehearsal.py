@@ -268,9 +268,11 @@ def run(args: argparse.Namespace) -> int:
         _write_reports(report, release_dir)
         rec.save()
         return 0
-    if not report["carried_commits"] and before_head != target_head:
+    target_already_merged = False
+    if before_head != target_head:
         merge_base = _git_text(rec, repo, "merge-base", before_head, target_head, check=False)
-        if merge_base:
+        target_already_merged = bool(merge_base and merge_base == target_head)
+        if not report["carried_commits"] and merge_base and not target_already_merged:
             report["carried_commits"] = [
                 line
                 for line in _git_text(rec, repo, "rev-list", "--reverse", f"{merge_base}..{before_head}", check=False).splitlines()
@@ -299,17 +301,26 @@ def run(args: argparse.Namespace) -> int:
         _git(rec, scratch_repo, "fetch", upstream_url, target_head, check=False)
     _git(rec, scratch_repo, "config", "user.email", "hermes-rehearsal@example.invalid")
     _git(rec, scratch_repo, "config", "user.name", "Hermes Update Rehearsal")
-    scratch_carried = _carried_commits_between(rec, scratch_repo, target_head, before_head)
-    if scratch_carried:
-        report["carried_commits"] = scratch_carried
-    _git(rec, scratch_repo, "checkout", "-B", "update-rehearsal", target_head)
+    scratch_merge_base = _git_text(rec, scratch_repo, "merge-base", before_head, target_head, check=False)
+    if scratch_merge_base and scratch_merge_base == target_head:
+        rec.log(
+            "Target head is already contained in live HEAD; "
+            "checking out live HEAD in scratch instead of replaying carried commits."
+        )
+        report["carried_commits"] = []
+        _git(rec, scratch_repo, "checkout", "-B", "update-rehearsal", before_head)
+    else:
+        scratch_carried = _carried_commits_between(rec, scratch_repo, target_head, before_head)
+        if scratch_carried:
+            report["carried_commits"] = scratch_carried
+        _git(rec, scratch_repo, "checkout", "-B", "update-rehearsal", target_head)
 
-    for commit in report["carried_commits"]:
-        result = _git(rec, scratch_repo, "cherry-pick", "--allow-empty", commit, check=False)
-        if result.returncode != 0:
-            report["conflicts"].append(commit)
-            _git(rec, scratch_repo, "cherry-pick", "--abort", check=False)
-            break
+        for commit in report["carried_commits"]:
+            result = _git(rec, scratch_repo, "cherry-pick", "--allow-empty", commit, check=False)
+            if result.returncode != 0:
+                report["conflicts"].append(commit)
+                _git(rec, scratch_repo, "cherry-pick", "--abort", check=False)
+                break
 
     for name, command in DEFAULT_TESTS:
         report["tests"].append(_run_test(rec, scratch_repo, name, command, args.skip_tests))
