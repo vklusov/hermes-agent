@@ -183,6 +183,51 @@ def _terminal_policy_command_is_read_only(command: str) -> bool:
     )
 
 
+def _terminal_contains_allowed_read_only_audit(command: str) -> bool:
+    """Recognize conservative compound diagnostics as read-only.
+
+    Fleet triage often needs harmless shell glue/redirection around commands
+    like ssh, git status/diff, pgrep, df, and health checks.  The broad
+    mutation regex catches redirection (`2>/dev/null`) and compound shells, so
+    keep an explicit allow-list for audit commands while still rejecting
+    lifecycle, install, file-write, and destructive git verbs.
+    """
+
+    lowered = command.lower()
+    hard_denies = (
+        r"\b(?:systemctl|service|launchctl|restart|shutdown|reboot|poweroff|kill(?:all)?|pkill)\b",
+        r"\b(?:rm|unlink|rmdir|truncate|mv|cp|install|chmod|chown|tee|apply_patch)\b",
+        r"\b(?:python\s+-c|perl\s+-pi|sed\s+-i)\b",
+        r"\bcat\s*>",
+        r"\bgit\s+(?:clean|reset|checkout|switch|pull|merge|rebase|commit|push|cherry-pick)\b",
+        r"\b(?:apt|dnf|yum|brew|pip|uv\s+pip)\s+(?:install|remove|upgrade|update)\b",
+    )
+    if any(re.search(pattern, lowered, re.IGNORECASE) for pattern in hard_denies):
+        return False
+
+    # Require a recognizable read-only audit anchor.
+    if not re.search(r"\bssh\b", lowered) and not re.search(
+        r"\bgit\s+(?:status|diff|rev-parse|rev-list|log|show|branch|remote)\b", lowered
+    ):
+        return False
+
+    allowed_commands = {
+        "ssh", "set", "echo", "cd", "date", "hostname", "id", "git",
+        "df", "pgrep", "grep", "true", "false", "command", "test",
+        "pwd", "printf", "uname", "lsblk", "findmnt", "pvs", "vgs",
+        "lvs", "stat", "getent", "ps", "curl",
+    }
+    # Check only command-position words, not arguments/paths.
+    for match in re.finditer(r"(?:^|[;&|()])\s*([A-Za-z_][A-Za-z0-9_.-]*)", command):
+        word = match.group(1)
+        next_char = command[match.end(1) : match.end(1) + 1]
+        if next_char == "=" and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", word):
+            continue
+        if word not in allowed_commands:
+            return False
+    return True
+
+
 def _terminal_is_mutation(args: Mapping[str, Any]) -> bool:
     command = str(args.get("command") or "")
     if not command.strip():
@@ -190,6 +235,8 @@ def _terminal_is_mutation(args: Mapping[str, Any]) -> bool:
     if _terminal_policy_command_is_read_only(command):
         return False
     if _terminal_read_only_audit_command(command):
+        return False
+    if _terminal_contains_allowed_read_only_audit(command):
         return False
     return bool(_TERMINAL_MUTATION_RE.search(command))
 

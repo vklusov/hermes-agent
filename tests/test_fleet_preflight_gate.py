@@ -345,3 +345,48 @@ def test_session_context_cron_fleet_approval_is_task_local(monkeypatch):
     finally:
         clear_session_vars(tokens)
     assert get_session_env("HERMES_CRON_FLEET_APPROVAL") == ""
+
+def test_compound_read_only_fedor_triage_allowed_without_marker(monkeypatch):
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.delenv("HERMES_FLEET_CHANGE_CONTEXT", raising=False)
+
+    command = (
+        "ssh -i /home/wwolfy/.ssh/id_ed25519_archivarius "
+        "-o BatchMode=yes root@100.92.229.56 "
+        "'set -euo pipefail; "
+        "cd /usr/local/lib/hermes-agent; "
+        "GIT_OPTIONAL_LOCKS=0 git status --short --branch; "
+        "git diff --check -- gateway/shutdown_forensics.py 2>/dev/null || true; "
+        "pgrep -af hermes || true; "
+        "df -h /'"
+    )
+
+    decision = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {"command": command},
+        user_task="Fedor Hermes dirty WIP read-only triage",
+    )
+
+    assert decision.blocked is False
+    assert decision.classified is True
+    assert decision.mutation is False
+
+
+def test_compound_read_only_allowlist_still_blocks_git_pull(monkeypatch):
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.delenv("HERMES_FLEET_CHANGE_CONTEXT", raising=False)
+
+    decision = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {
+            "command": (
+                "ssh root@100.92.229.56 "
+                "'cd /usr/local/lib/hermes-agent; git pull --ff-only'"
+            )
+        },
+        user_task="Fedor Hermes dirty WIP triage",
+    )
+
+    assert decision.blocked is True
+    assert decision.classified is True
+    assert decision.mutation is True
