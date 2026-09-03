@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 import yaml
 
@@ -32,6 +32,28 @@ REQUIRED_TIER_B_FIELDS = (
     "rollback_pointer",
     "escalation_rule",
 )
+REQUIRED_NATIVE_FLEET_ACTION_CLASSES = {
+    "runtime_code_overlay",
+    "scheduled_job_creation_or_update",
+    "service_lifecycle",
+    "provider_or_config_change",
+    "cleanup_or_retention",
+    "live_checkout_update",
+}
+REQUIRED_NATIVE_FLEET_DECISION_FIELDS = {
+    "affected_nodes",
+    "rollout_order",
+    "approvals",
+    "evidence_root",
+    "result",
+}
+REQUIRED_NATIVE_FLEET_EXCEPTION_FIELDS = {
+    "exception",
+    "exception_reason",
+    "affected_nodes",
+    "skipped_nodes",
+    "approval_ref",
+}
 DENYLIST_PATTERNS = {
     "reboot",
     "poweroff",
@@ -186,6 +208,27 @@ def _validate_audit_requirements(policy: dict[str, Any]) -> None:
     _require(audit.get("evidence_root"), "audit_requirements requires evidence_root")
 
 
+def _validate_native_fleet_gate(policy: dict[str, Any]) -> None:
+    raw_gate = policy.get("native_fleet_gate")
+    _require(isinstance(raw_gate, dict), "native_fleet_gate must be a mapping")
+    gate = cast(dict[str, Any], raw_gate)
+    _require(gate.get("mode") == "enforce_before_mutation", "native_fleet_gate mode must enforce before mutation")
+    _require(
+        gate.get("default_rollout_order") == ["fedor", "93", "archivarius"],
+        "native_fleet_gate default_rollout_order must be fedor -> 93 -> archivarius",
+    )
+    action_classes = set(gate.get("fleet_affecting_action_classes") or [])
+    missing_actions = REQUIRED_NATIVE_FLEET_ACTION_CLASSES - action_classes
+    _require(not missing_actions, f"native_fleet_gate missing action classes: {sorted(missing_actions)}")
+    decision_fields = set(gate.get("required_decision_fields") or [])
+    missing_decision = REQUIRED_NATIVE_FLEET_DECISION_FIELDS - decision_fields
+    _require(not missing_decision, f"native_fleet_gate required_decision_fields missing: {sorted(missing_decision)}")
+    exception_fields = set(gate.get("exception_required_fields") or [])
+    missing_exception = REQUIRED_NATIVE_FLEET_EXCEPTION_FIELDS - exception_fields
+    _require(not missing_exception, f"native_fleet_gate exception_required_fields missing: {sorted(missing_exception)}")
+    _require(gate.get("on_missing_gate") == "block_and_create_kanban", "native_fleet_gate requires block_and_create_kanban fallback")
+
+
 def validate_policy_file(path: str | Path = DEFAULT_POLICY_PATH) -> dict[str, Any]:
     policy_path = Path(path)
     policy = _load_yaml(policy_path)
@@ -193,6 +236,7 @@ def validate_policy_file(path: str | Path = DEFAULT_POLICY_PATH) -> dict[str, An
     _validate_denylist(policy)
     _validate_tiers(policy)
     _validate_audit_requirements(policy)
+    _validate_native_fleet_gate(policy)
     return policy
 
 

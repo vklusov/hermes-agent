@@ -42,6 +42,40 @@ audit_requirements:
   snapshot_retention_days: 30
   write_format: markdown_and_json
 
+native_fleet_gate:
+  mode: enforce_before_mutation
+  summary: Native/preflight guard for fleet-affecting Hermes mutations.
+  default_rollout_order:
+    - fedor
+    - "93"
+    - archivarius
+  fleet_affecting_action_classes:
+    - runtime_code_overlay
+    - scheduled_job_creation_or_update
+    - service_lifecycle
+    - provider_or_config_change
+    - cleanup_or_retention
+    - live_checkout_update
+  required_decision_fields:
+    - affected_nodes
+    - rollout_order
+    - approvals
+    - evidence_root
+    - result
+  exception_required_fields:
+    - exception
+    - exception_reason
+    - affected_nodes
+    - skipped_nodes
+    - approval_ref
+  allowed_exceptions:
+    - archivarius_only
+  on_missing_gate: block_and_create_kanban
+  policy_gap_card: t_ea6fc246
+  notes:
+    - Policy text and memory are advisory only; native/CLI/gateway/cron paths must record this decision before mutation.
+    - Archivarius-only mutations require explicit exception metadata that records why Fedor and 93 were skipped.
+
 package_allowlists:
   python_readonly:
     packages: []
