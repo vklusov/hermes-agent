@@ -1371,6 +1371,7 @@ def cronjob(
     monitor_script: Optional[str] = None,
     monitor_url: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
+    fleet_decision: Optional[Dict[str, Any]] = None,
     task_id: str = None,
     session_id: Optional[str] = None,
 ) -> str:
@@ -1487,6 +1488,7 @@ def cronjob(
                     # dispatch below: models do not make model-config
                     # decisions (standing policy).
                     reasoning_effort=reasoning_effort,
+                    fleet_decision=fleet_decision,
                 )
             except CronSchedulerRegistrationError as exc:
                 _partial = exc.to_dict()
@@ -1907,6 +1909,10 @@ Jobs run in a fresh session with no current-chat context, so prompts must be sel
                 "type": "boolean",
                 "description": "True = the job's delivery is CONTINUABLE — the user can reply and the agent has the brief in context (threads on thread-capable platforms, mirrored into the DM elsewhere). Use for conversational recurring jobs (briefings); leave unset for fire-and-forget alerts. Scope: the job's own conversation only — the origin chat, the home-channel fallback when deliver='origin' captured no origin (script-created jobs), or the job's single explicit platform:chat target (this flag is the only way to attach an explicit target). Broadcast targets are never attached; no effect when deliver='local'."
             },
+            "fleet_decision": {
+                "type": "object",
+                "description": "Machine-readable native fleet policy gate decision required for fleet-affecting scheduled jobs: either staged rollout_order ['fedor','93','archivarius'] with approvals/evidence/result, or explicit archivarius_only exception with skipped_nodes and approval_ref."
+            },
         },
         "required": ["action"]
     }
@@ -1973,6 +1979,7 @@ def _cronjob_handler(args, **kw):
         workdir=args.get("workdir"),
         no_agent=args.get("no_agent"),
         attach_to_session=args.get("attach_to_session"),
+        fleet_decision=args.get("fleet_decision"),
         monitor_script=_mon_script,
         monitor_url=_mon_url,
         task_id=kw.get("task_id"),
