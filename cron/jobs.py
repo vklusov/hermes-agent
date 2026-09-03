@@ -1696,6 +1696,7 @@ def create_job(
     monitor_url: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     failure_deliver: Optional[str] = None,
+    fleet_decision: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Create a new cron job and return the stored record.
 
@@ -1737,6 +1738,22 @@ def create_job(
         or (f["script"] if f["no_agent"] else None)
         or "cron job"
     )
+
+    from policy.fleet_gate import require_fleet_gate, scheduled_job_requires_fleet_gate
+    normalized_fleet_decision = None
+    if scheduled_job_requires_fleet_gate(
+        prompt=prompt_text,
+        script=f["script"],
+        name=name or label_source,
+        workdir=f["workdir"],
+        skills=normalized_skills,
+    ):
+        normalized_fleet_decision = require_fleet_gate(
+            fleet_decision,
+            action_class="scheduled_job_creation_or_update",
+            mutation="cron job creation",
+        ).to_dict()
+
     name = name or label_source[:50].strip()
     provider_snapshot, model_snapshot = _compute_provider_model_snapshots(
         provider=f["provider"], model=f["model"], base_url=f["base_url"], no_agent=f["no_agent"])
@@ -1789,6 +1806,8 @@ def create_job(
     ):
         if value is not None:
             job[key] = value
+    if normalized_fleet_decision is not None:
+        job["fleet_decision"] = normalized_fleet_decision
 
     with _jobs_lock():
         save_jobs(load_jobs() + [job])

@@ -871,6 +871,7 @@ def cronjob(
     monitor_url: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     failure_deliver: Optional[Union[str, List[str]]] = None,
+    fleet_decision: Optional[Dict[str, Any]] = None,
     task_id: str = None,
     session_id: Optional[str] = None) -> str:
     """Unified cron job management tool."""
@@ -977,6 +978,10 @@ Jobs run in a fresh session with no current-chat context, so prompts must be sel
                 "type": "boolean",
                 "description": "True = the job's delivery is CONTINUABLE — the user can reply and the agent has the brief in context (threads on thread-capable platforms, mirrored into the DM elsewhere). Use for conversational recurring jobs (briefings); leave unset for fire-and-forget alerts. Scope: the job's own conversation only — the origin chat, the home-channel fallback when deliver='origin' captured no origin (script-created jobs), or the job's single explicit platform:chat target (this flag is the only way to attach an explicit target). Broadcast targets are never attached; no effect when deliver='local'."
             },
+            "fleet_decision": {
+                "type": "object",
+                "description": "Machine-readable native fleet policy gate decision required for fleet-affecting scheduled jobs: either staged rollout_order ['fedor','93','archivarius'] with approvals/evidence/result, or explicit archivarius_only exception with skipped_nodes and approval_ref."
+            },
         },
         "required": ["action"]
     }
@@ -1000,7 +1005,8 @@ def check_cronjob_requirements() -> bool:
 # different model. Programmatic callers of cronjob() itself retain the parameters.
 _HANDLER_FORWARDED_ARGS = (
     "job_id", "prompt", "schedule", "name", "repeat", "deliver", "failure_deliver", "skill", "skills", "reason",
-    "script", "context_from", "continuity", "enabled_toolsets", "workdir", "no_agent", "attach_to_session")
+    "script", "context_from", "continuity", "enabled_toolsets", "workdir", "no_agent", "attach_to_session",
+    "fleet_decision")
 
 
 def _cronjob_handler(args, **kw):
