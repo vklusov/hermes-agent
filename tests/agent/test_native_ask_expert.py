@@ -20,9 +20,9 @@ def test_native_bridge_activation_writes_runtime_context(tmp_path, monkeypatch):
     assert "API-Key" not in content
 
 
-def test_native_ask_expert_activation_exposes_core_tool():
+def test_native_ask_expert_activation_exposes_registered_tool():
     from agent import native_skills as ns
-    from model_tools import get_tool_definitions
+    from tools.registry import registry
 
     activation = ns.activate_native_skill("ask-expert")
 
@@ -31,18 +31,11 @@ def test_native_ask_expert_activation_exposes_core_tool():
     assert activation.mode == "tool"
     assert "custom:anymodel/cc/claude-sonnet-5" in activation.detail
 
-    tool_defs = get_tool_definitions(
-        enabled_toolsets=["hermes-cli"],
-        quiet_mode=True,
-        skip_tool_search_assembly=True,
-    )
-    ask_expert_def = next(
-        item for item in tool_defs if item["function"]["name"] == "ask_expert"
-    )
-    parameters = ask_expert_def["function"]["parameters"]
-    assert parameters["required"] == ["task"]
-    assert parameters["properties"]["task"]["type"] == "string"
-    assert "function" not in ask_expert_def["function"]
+    entry = registry.get_entry("ask_expert")
+    assert entry is not None
+    assert entry.toolset == "hermes-ask-expert"
+    assert entry.schema["parameters"]["required"] == ["task"]
+    assert entry.schema["parameters"]["properties"]["task"]["type"] == "string"
 
 
 def test_native_skill_activation_deduplicates_and_logs_label():
