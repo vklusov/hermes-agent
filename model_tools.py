@@ -729,6 +729,34 @@ def _pre_dispatch_guards(function_name: str, function_args: Dict[str, Any], skip
         logger.debug("ACP edit approval guard error: %s", _edit_approval_err)
         if function_name in {"write_file", "patch"}:
             return function_args, (tool_error("Edit approval denied: approval guard failed"), "edit_approval_error", None)
+
+    try:
+        from agent.fleet_preflight import check_fleet_preflight
+
+        fleet_preflight = check_fleet_preflight(function_name, function_args, user_task=user_task)
+        if fleet_preflight.blocked:
+            return function_args, (
+                tool_error(
+                    fleet_preflight.message,
+                    error_type="fleet_preflight_required",
+                    classified_fleet_context=True,
+                    mutation=True,
+                    marker_path=fleet_preflight.marker_path,
+                ),
+                "fleet_preflight_required",
+                fleet_preflight.message,
+            )
+    except Exception as _fleet_preflight_err:
+        logger.debug("fleet preflight guard error: %s", _fleet_preflight_err)
+        if function_name in {"terminal", "write_file", "patch", "ha_call_service"}:
+            return function_args, (
+                tool_error(
+                    "Fleet-change preflight guard failed closed before mutation",
+                    error_type="fleet_preflight_guard_error",
+                ),
+                "fleet_preflight_guard_error",
+                "Fleet-change preflight guard failed closed before mutation",
+            )
     return function_args, None
 
 
