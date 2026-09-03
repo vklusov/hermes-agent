@@ -1279,6 +1279,49 @@ def _custom_provider_request_overrides(custom_provider: Dict[str, Any]) -> Dict[
     return {"extra_body": dict(extra_body)}
 
 
+def _custom_provider_serves_model(custom_provider: Dict[str, Any], model: Optional[str]) -> bool:
+    """Return True when a custom provider entry advertises ``model``.
+
+    Named custom providers often keep a strong model as their provider-level
+    default while listing cheaper/auxiliary models in ``models``. Runtime
+    callers that pass ``target_model`` (background review, compression, model
+    switches) need that target to survive resolution when the provider catalog
+    says it is available.
+    """
+    target = str(model or "").strip().lower()
+    if not target:
+        return False
+    provider_name = str(custom_provider.get("name") or custom_provider.get("provider_key") or "").strip().lower()
+    if provider_name and target.startswith(provider_name + "/"):
+        return True
+    models = custom_provider.get("models")
+    if not isinstance(models, (dict, list)):
+        return True
+    for key in ("model", "default_model"):
+        value = custom_provider.get(key)
+        if isinstance(value, str) and value.strip().lower() == target:
+            return True
+    if isinstance(models, dict):
+        return any(str(mid).strip().lower() == target for mid in models.keys())
+    for item in models:
+        if isinstance(item, str) and item.strip().lower() == target:
+            return True
+        if isinstance(item, dict):
+            mid = item.get("id") or item.get("name")
+            if isinstance(mid, str) and mid.strip().lower() == target:
+                return True
+    return False
+
+
+def _custom_provider_effective_model(
+    custom_provider: Dict[str, Any],
+    target_model: Optional[str],
+) -> str:
+    if _custom_provider_serves_model(custom_provider, target_model):
+        return str(target_model or "").strip()
+    return str(custom_provider.get("model", "") or "").strip()
+
+
 def _resolve_named_custom_runtime(
     *,
     requested_provider: str,
@@ -1411,6 +1454,9 @@ def _resolve_named_custom_runtime(
     if pool_result:
         # Propagate the requested target model only when this named provider
         # advertises it; otherwise fall back to the provider-level default.
+        # Without this, auxiliary/background routes that request a cheaper
+        # sibling model (for example luna) silently bill as the provider's
+        # stronger default (for example sol).
         model_name = _custom_provider_effective_model(custom_provider, target_model)
         if model_name:
             pool_result["model"] = model_name
@@ -1483,9 +1529,7 @@ def _resolve_named_custom_runtime(
     model_name = _custom_provider_effective_model(custom_provider, target_model)
     if model_name:
         result["model"] = model_name
-    _lift_model_capabilities(
-        custom_provider, result.get("model"), result
-    )
+    _lift_model_capabilities(custom_provider, result.get("model"), result)
     if isinstance(custom_provider.get("max_output_tokens"), int):
         result["max_output_tokens"] = custom_provider["max_output_tokens"]
     # Per-provider extra HTTP headers (proxies, gateways, custom auth).

@@ -109,6 +109,50 @@ def test_main_applies_preloaded_skills_to_system_prompt(monkeypatch):
     assert cli_obj.preloaded_skills == ["hermes-agent-dev", "github-auth"]
 
 
+def test_main_merges_config_auto_preload_with_cli_skills(monkeypatch):
+    import cli as cli_mod
+
+    created = {}
+
+    def fake_cli(**kwargs):
+        created["cli"] = _DummyCLI(**kwargs)
+        return created["cli"]
+
+    requested = {}
+
+    def fake_preload(skills, task_id=None):
+        requested["skills"] = skills
+        return ("skill prompt", list(skills), [])
+
+    monkeypatch.setattr(cli_mod, "HermesCLI", fake_cli)
+    monkeypatch.setattr(cli_mod, "build_preloaded_skills_prompt", fake_preload)
+    monkeypatch.setattr(
+        cli_mod,
+        "CLI_CONFIG",
+        {"skills": {"auto_preload": ["bridge-agents", "ask-expert"]}},
+        raising=False,
+    )
+
+    with pytest.raises(SystemExit):
+        cli_mod.main(skills="ask-expert,github-auth", list_tools=True)
+
+    _real_finalize(created["cli"])
+    assert requested["skills"] == ["bridge-agents", "ask-expert", "github-auth"]
+
+
+def test_finalize_allows_native_preloaded_skill_without_prompt_payload():
+    cli_obj = _DummyCLI()
+    cli_obj._preload_skills_thread = None
+    cli_obj._preload_skills_error = None
+    cli_obj._preload_skills_result = ("", [], ["ask-expert"])
+    cli_obj._native_preloaded_skills = {"ask-expert"}
+
+    _real_finalize(cli_obj)
+
+    assert cli_obj.system_prompt == "base prompt"
+    assert cli_obj.preloaded_skills == ["ask-expert"]
+
+
 def test_main_raises_for_unknown_preloaded_skill(monkeypatch):
     import cli as cli_mod
 
