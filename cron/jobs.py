@@ -2351,6 +2351,7 @@ def create_job(
     monitor_url: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     failure_deliver: Optional[str] = None,
+    fleet_decision: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -2506,6 +2507,21 @@ def create_job(
 
     label_source = (prompt_text or (normalized_skills[0] if normalized_skills else None) or (normalized_script if normalized_no_agent else None)) or "cron job"
 
+    from policy.fleet_gate import require_fleet_gate, scheduled_job_requires_fleet_gate
+    normalized_fleet_decision = None
+    if scheduled_job_requires_fleet_gate(
+        prompt=prompt_text,
+        script=normalized_script,
+        name=name or label_source,
+        workdir=normalized_workdir,
+        skills=normalized_skills,
+    ):
+        normalized_fleet_decision = require_fleet_gate(
+            fleet_decision,
+            action_class="scheduled_job_creation_or_update",
+            mutation="cron job creation",
+        ).to_dict()
+
     provider_snapshot, model_snapshot = _compute_provider_model_snapshots(
         provider=normalized_provider,
         model=normalized_model,
@@ -2575,6 +2591,8 @@ def create_job(
         "enabled_toolsets": normalized_toolsets,
         "workdir": normalized_workdir,
     }
+    if normalized_fleet_decision is not None:
+        job["fleet_decision"] = normalized_fleet_decision
     # Only persist attach_to_session when explicitly set, so existing jobs and
     # the common case stay byte-identical (absent key => fall back to the
     # global cron.mirror_delivery config, default off).
@@ -2759,6 +2777,24 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
             if any(k in updates for k in _PAYLOAD_FIELDS):
                 if job_payload_is_empty(updated):
                     raise ValueError(EMPTY_PAYLOAD_ERROR)
+
+            from policy.fleet_gate import require_fleet_gate, scheduled_job_requires_fleet_gate
+            _update_fleet_decision = updates.get("fleet_decision", job.get("fleet_decision"))
+            _updated_skills = [str(item) for item in (updated.get("skills") or []) if item]
+            if not _updated_skills and updated.get("skill"):
+                _updated_skills = [str(updated["skill"])]
+            if scheduled_job_requires_fleet_gate(
+                prompt=str(updated.get("prompt") or ""),
+                script=updated.get("script"),
+                name=updated.get("name"),
+                workdir=updated.get("workdir"),
+                skills=_updated_skills,
+            ):
+                updated["fleet_decision"] = require_fleet_gate(
+                    _update_fleet_decision,
+                    action_class="scheduled_job_creation_or_update",
+                    mutation=f"cron job update {job_id}",
+                ).to_dict()
             schedule_changed = "schedule" in updates
             inference_fields_changed = bool(
                 {"provider", "model", "base_url", "no_agent"}.intersection(updates)

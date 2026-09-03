@@ -70,6 +70,69 @@ def test_denylist_covers_tier_c_gates():
     assert all(entry["requires"] == "ask_vadim" for entry in policy["denylist"])
 
 
+def test_policy_declares_native_fleet_rollout_gate_contract():
+    policy = validate_policy_file(POLICY_PATH)
+
+    native_gate = policy["native_fleet_gate"]
+    assert native_gate["mode"] == "enforce_before_mutation"
+    assert native_gate["default_rollout_order"] == ["fedor", "93", "archivarius"]
+    assert set(native_gate["fleet_affecting_action_classes"]) >= {
+        "runtime_code_overlay",
+        "scheduled_job_creation_or_update",
+        "service_lifecycle",
+        "provider_or_config_change",
+        "cleanup_or_retention",
+        "live_checkout_update",
+    }
+    assert set(native_gate["required_decision_fields"]) >= {
+        "affected_nodes",
+        "rollout_order",
+        "approvals",
+        "evidence_root",
+        "result",
+    }
+    assert set(native_gate["exception_required_fields"]) >= {
+        "exception",
+        "exception_reason",
+        "affected_nodes",
+        "skipped_nodes",
+        "approval_ref",
+    }
+
+
+def test_validator_rejects_policy_without_native_fleet_gate(tmp_path):
+    policy = load_policy()
+    policy.pop("native_fleet_gate", None)
+    mutated = tmp_path / "missing-native-gate.yaml"
+    mutated.write_text(yaml.safe_dump(policy), encoding="utf-8")
+
+    with pytest.raises(PolicyValidationError, match="native_fleet_gate"):
+        validate_policy_file(mutated)
+
+
+def test_validator_rejects_native_gate_without_archivarius_exception_contract(tmp_path):
+    policy = load_policy()
+    policy["native_fleet_gate"] = {
+        "mode": "enforce_before_mutation",
+        "default_rollout_order": ["fedor", "93", "archivarius"],
+        "fleet_affecting_action_classes": [
+            "runtime_code_overlay",
+            "scheduled_job_creation_or_update",
+            "service_lifecycle",
+            "provider_or_config_change",
+            "cleanup_or_retention",
+            "live_checkout_update",
+        ],
+        "required_decision_fields": ["affected_nodes", "rollout_order", "approvals", "evidence_root", "result"],
+        "exception_required_fields": ["exception", "exception_reason"],
+    }
+    mutated = tmp_path / "weak-native-gate.yaml"
+    mutated.write_text(yaml.safe_dump(policy), encoding="utf-8")
+
+    with pytest.raises(PolicyValidationError, match="exception_required_fields"):
+        validate_policy_file(mutated)
+
+
 def test_validator_rejects_unsafe_tier_b_expansion(tmp_path):
     policy = load_policy()
     policy["tiers"]["B"]["allowed_actions"].append(

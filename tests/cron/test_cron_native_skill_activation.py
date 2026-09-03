@@ -33,7 +33,7 @@ def test_cron_run_activates_job_native_skills_before_agent(monkeypatch):
         def __init__(self, **kwargs):
             agent_kwargs.update(kwargs)
 
-        def run_conversation(self, prompt, auto_confirm=False):
+        def run_conversation(self, prompt, auto_confirm=False, **kwargs):
             assert activations_seen == [["ask-expert"]]
             return {
                 "completed": True,
