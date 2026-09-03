@@ -1459,6 +1459,60 @@ def handle_function_call(
                 )
                 return result
 
+
+        try:
+            from agent.fleet_preflight import check_fleet_preflight
+
+            fleet_preflight = check_fleet_preflight(
+                function_name,
+                function_args,
+                user_task=user_task,
+            )
+            if fleet_preflight.blocked:
+                result = tool_error(
+                    fleet_preflight.message,
+                    error_type="fleet_preflight_required",
+                    classified_fleet_context=True,
+                    mutation=True,
+                    marker_path=fleet_preflight.marker_path,
+                )
+                _emit_post_tool_call_hook(
+                    function_name=function_name,
+                    function_args=function_args,
+                    result=result,
+                    task_id=task_id,
+                    session_id=session_id,
+                    tool_call_id=tool_call_id,
+                    turn_id=turn_id,
+                    api_request_id=api_request_id,
+                    status="blocked",
+                    error_type="fleet_preflight_required",
+                    error_message=fleet_preflight.message,
+                    middleware_trace=list(_tool_middleware_trace),
+                )
+                return result
+        except Exception as _fleet_preflight_err:
+            logger.debug("fleet preflight guard error: %s", _fleet_preflight_err)
+            if function_name in {"terminal", "write_file", "patch", "ha_call_service"}:
+                result = tool_error(
+                    "Fleet-change preflight guard failed closed before mutation",
+                    error_type="fleet_preflight_guard_error",
+                )
+                _emit_post_tool_call_hook(
+                    function_name=function_name,
+                    function_args=function_args,
+                    result=result,
+                    task_id=task_id,
+                    session_id=session_id,
+                    tool_call_id=tool_call_id,
+                    turn_id=turn_id,
+                    api_request_id=api_request_id,
+                    status="blocked",
+                    error_type="fleet_preflight_guard_error",
+                    middleware_trace=list(_tool_middleware_trace),
+                )
+                return result
+
         # Notify the read-loop tracker when a non-read/search tool runs,
         # so the *consecutive* counter resets (reads after other work are fine).
         if function_name not in _READ_SEARCH_TOOLS:
