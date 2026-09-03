@@ -142,3 +142,127 @@ class TestCheckSystemdTimingAlignment:
         # for whatever unit pytest IS in.  Both are valid; we just ensure
         # the function doesn't raise.
         assert result is None or isinstance(result, dict)
+
+    def test_system_slice_queries_system_manager_only(self, monkeypatch):
+        monkeypatch.setenv("INVOCATION_ID", "abc")
+        monkeypatch.setattr(
+            "builtins.open",
+            mock_open(read_data="0::/system.slice/hermes-gateway.service\n"),
+        )
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            assert "--user" not in args
+            return type(
+                "Result",
+                (),
+                {"returncode": 0, "stdout": "TimeoutStopUSec=3min 30s\n"},
+            )()
+
+        monkeypatch.setattr(sf.subprocess, "run", fake_run)
+
+        result = sf.check_systemd_timing_alignment(180.0)
+
+        assert result == {
+            "unit": "hermes-gateway.service",
+            "timeout_stop_sec": 210.0,
+            "drain_timeout": 180.0,
+            "cron_drain_timeout": 30.0,
+            "expected_min": 210.0,
+            "mismatch": False,
+        }
+        assert calls == [[
+            "systemctl",
+            "show",
+            "hermes-gateway.service",
+            "--property=TimeoutStopUSec",
+            "--property=LoadState",
+        ]]
+
+    def test_skips_not_found_scope_before_timeout_parse(self, monkeypatch):
+        monkeypatch.setenv("INVOCATION_ID", "abc")
+        monkeypatch.setattr(
+            "builtins.open",
+            mock_open(read_data="0::/foo.slice/hermes-gateway-fedoramm.service\n"),
+        )
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            if "--user" in args:
+                return type(
+                    "Result",
+                    (),
+                    {"returncode": 0, "stdout": "TimeoutStopUSec=1min 30s\nLoadState=not-found\n"},
+                )()
+            return type(
+                "Result",
+                (),
+                {"returncode": 0, "stdout": "TimeoutStopUSec=3min 30s\nLoadState=loaded\n"},
+            )()
+
+        monkeypatch.setattr(sf.subprocess, "run", fake_run)
+
+        result = sf.check_systemd_timing_alignment(180.0)
+
+        assert result == {
+            "unit": "hermes-gateway-fedoramm.service",
+            "timeout_stop_sec": 210.0,
+            "drain_timeout": 180.0,
+            "cron_drain_timeout": 30.0,
+            "expected_min": 210.0,
+            "mismatch": False,
+        }
+        assert calls == [
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "hermes-gateway-fedoramm.service",
+                "--property=TimeoutStopUSec",
+                "--property=LoadState",
+            ],
+            [
+                "systemctl",
+                "show",
+                "hermes-gateway-fedoramm.service",
+                "--property=TimeoutStopUSec",
+                "--property=LoadState",
+            ],
+        ]
+
+    def test_user_slice_queries_user_manager_only(self, monkeypatch):
+        monkeypatch.setenv("INVOCATION_ID", "abc")
+        monkeypatch.setattr(
+            "builtins.open",
+            mock_open(
+                read_data="0::/user.slice/user-1000.slice/user@1000.service/app.slice/hermes-gateway.service\n"
+            ),
+        )
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            assert "--user" in args
+            return type(
+                "Result",
+                (),
+                {"returncode": 0, "stdout": "TimeoutStopUSec=90000000\n"},
+            )()
+
+        monkeypatch.setattr(sf.subprocess, "run", fake_run)
+
+        result = sf.check_systemd_timing_alignment(60.0)
+
+        assert result is not None
+        assert result["timeout_stop_sec"] == 90.0
+        assert result["mismatch"] is False
+        assert calls == [[
+            "systemctl",
+            "--user",
+            "show",
+            "hermes-gateway.service",
+            "--property=TimeoutStopUSec",
+            "--property=LoadState",
+        ]]
