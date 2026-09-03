@@ -696,6 +696,7 @@ def _apply_request_middleware(
 
 def _pre_dispatch_guards(function_name: str, function_args: Dict[str, Any], skip_pre_tool_call_hook: bool,
                          ids: _CallIds, middleware_trace: List[Dict[str, Any]],
+                         user_task: Optional[str] = None,
                          ) -> Tuple[Dict[str, Any], Optional[Tuple[Any, str, Optional[str]]]]:
     """Plugin pre_tool_call hook, then ACP edit approval.
 
@@ -729,6 +730,34 @@ def _pre_dispatch_guards(function_name: str, function_args: Dict[str, Any], skip
         logger.debug("ACP edit approval guard error: %s", _edit_approval_err)
         if function_name in {"write_file", "patch"}:
             return function_args, (tool_error("Edit approval denied: approval guard failed"), "edit_approval_error", None)
+
+    try:
+        from agent.fleet_preflight import check_fleet_preflight
+
+        fleet_preflight = check_fleet_preflight(function_name, function_args, user_task=user_task)
+        if fleet_preflight.blocked:
+            return function_args, (
+                tool_error(
+                    fleet_preflight.message,
+                    error_type="fleet_preflight_required",
+                    classified_fleet_context=True,
+                    mutation=True,
+                    marker_path=fleet_preflight.marker_path,
+                ),
+                "fleet_preflight_required",
+                fleet_preflight.message,
+            )
+    except Exception as _fleet_preflight_err:
+        logger.debug("fleet preflight guard error: %s", _fleet_preflight_err)
+        if function_name in {"terminal", "write_file", "patch", "ha_call_service"}:
+            return function_args, (
+                tool_error(
+                    "Fleet-change preflight guard failed closed before mutation",
+                    error_type="fleet_preflight_guard_error",
+                ),
+                "fleet_preflight_guard_error",
+                "Fleet-change preflight guard failed closed before mutation",
+            )
     return function_args, None
 
 
@@ -851,7 +880,7 @@ def handle_function_call(
         if function_name in _AGENT_LOOP_TOOLS:
             return tool_error(f"{function_name} must be handled by the agent loop")
 
-        function_args, blocked = _pre_dispatch_guards(function_name, function_args, skip_pre_tool_call_hook, ids, trace)
+        function_args, blocked = _pre_dispatch_guards(function_name, function_args, skip_pre_tool_call_hook, ids, trace, user_task)
         if blocked is not None:
             result, error_type, error_message = blocked
             return _emit(result, status="blocked", error_type=error_type, error_message=error_message)
