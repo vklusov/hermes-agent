@@ -26,6 +26,26 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    from gateway.restart import DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT
+except Exception:
+    DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT = 30.0
+
+
+def resolve_systemd_timeout_stop_sec(drain_timeout, cron_drain_timeout=DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT, cleanup_reserve_s=10.0, headroom_s=30.0, floor_s=60.0):
+    def _seconds(value):
+        try:
+            return max(float(value), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    drain = _seconds(drain_timeout)
+    cron = _seconds(cron_drain_timeout)
+    reserve = _seconds(cleanup_reserve_s)
+    headroom = _seconds(headroom_s)
+    floor = _seconds(floor_s)
+    cron_budget = (cron + reserve) if cron > 0.0 else 0.0
+    return int(max(floor, drain, cron_budget) + headroom)
+
 
 _SIGNAL_NAME_BY_NUM: Dict[int, str] = {}
 for _name in ("SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2"):
