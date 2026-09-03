@@ -134,6 +134,46 @@ class TestParseSystemdDuration:
 
 class TestCheckSystemdTimingAlignment:
 
+    def test_prefers_system_scope_when_cgroup_is_system_slice(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("INVOCATION_ID", "abc")
+        cgroup = tmp_path / "cgroup"
+        cgroup.write_text("0::/system.slice/hermes-gateway-fedoramm.service\n", encoding="utf-8")
+
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if path == "/proc/self/cgroup":
+                return real_open(cgroup, *args, **kwargs)
+            return real_open(path, *args, **kwargs)
+
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            if "--user" in argv:
+                return type("Result", (), {
+                    "returncode": 0,
+                    "stdout": "TimeoutStopUSec=1min 30s\nLoadState=not-found\n",
+                })()
+            return type("Result", (), {
+                "returncode": 0,
+                "stdout": "TimeoutStopUSec=3min 30s\nLoadState=loaded\n",
+            })()
+
+        monkeypatch.setattr(sf, "open", fake_open, raising=False)
+        monkeypatch.setattr(sf.subprocess, "run", fake_run)
+
+        result = sf.check_systemd_timing_alignment(180.0)
+
+        assert result == {
+            "unit": "hermes-gateway-fedoramm.service",
+            "timeout_stop_sec": 210.0,
+            "drain_timeout": 180.0,
+            "expected_min": 210.0,
+            "mismatch": False,
+        }
+        assert "--user" not in calls[0]
+
     def test_returns_none_when_unit_undeterminable(self, monkeypatch):
         monkeypatch.setenv("INVOCATION_ID", "abc")
         # /proc/self/cgroup likely doesn't end in .service for the test runner

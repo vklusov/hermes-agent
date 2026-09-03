@@ -199,13 +199,46 @@ def check_systemd_timing_alignment(
         return None  # Not running under systemd (or at least not directly)
     # /proc/self/cgroup: "0::/user.slice/.../hermes-gateway.service"
     unit_name: Optional[str] = None
+    cgroup_path: str = ""
     with contextlib.suppress(OSError), open("/proc/self/cgroup", encoding="utf-8") as fh:
         for line in fh:
-            parts = reversed(line.strip().split("/"))
+            if ".service" not in line:
+                continue
+            cgroup_path = line.strip()
+            parts = reversed(cgroup_path.split("/"))
             unit_name = next((p for p in parts if p.endswith(".service")), None)
             if unit_name:
                 break
-    if (timeout_us := _systemd_timeout_stop_us(unit_name) if unit_name else None) is None:
+    if not unit_name:
+        return None
+
+    timeout_us: Optional[int] = None
+    manager_flags = ([[], ["--user"]] if "/system.slice/" in cgroup_path else [["--user"], []])
+    for flag in manager_flags:
+        with contextlib.suppress(FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            result = subprocess.run(
+                [
+                    "systemctl",
+                    *flag,
+                    "show",
+                    unit_name,
+                    "--property=TimeoutStopUSec",
+                    "--property=LoadState",
+                ],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=2.0,
+            )
+            if result.returncode != 0:
+                continue
+            if any(line.strip() == "LoadState=not-found" for line in result.stdout.splitlines()):
+                continue
+            for line in result.stdout.splitlines():
+                if line.startswith("TimeoutStopUSec="):
+                    value = line.split("=", 1)[1].strip()
+                    timeout_us = int(value) if value.isdigit() else parse_systemd_duration_to_us(value)
+                    break
+            if timeout_us is not None:
+                break
+    if timeout_us is None:
         return None
     timeout_stop_sec = timeout_us / 1_000_000.0
     expected = float(resolve_systemd_timeout_stop_sec(drain_timeout, cron_drain_timeout))
