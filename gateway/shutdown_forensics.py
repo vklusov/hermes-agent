@@ -342,13 +342,15 @@ def check_systemd_timing_alignment(drain_timeout: float) -> Optional[Dict[str, A
 
     # Try to identify our unit name and ask systemctl for its config.
     unit_name: Optional[str] = None
+    cgroup_path: str = ""
     try:
         # /proc/self/cgroup gives us "0::/user.slice/.../hermes-gateway.service"
         with open("/proc/self/cgroup", encoding="utf-8") as fh:
             for line in fh:
                 # systemd cgroup line ends with the unit name
                 if ".service" in line:
-                    parts = line.strip().split("/")
+                    cgroup_path = line.strip()
+                    parts = cgroup_path.split("/")
                     for p in reversed(parts):
                         if p.endswith(".service"):
                             unit_name = p
@@ -360,19 +362,30 @@ def check_systemd_timing_alignment(drain_timeout: float) -> Optional[Dict[str, A
     if not unit_name:
         return None
 
-    # Query systemctl for TimeoutStopUSec.  Use --user OR system depending
-    # on which manager actually owns the unit.  Try user first since
-    # that's the common case for hermes.
+    # Query systemctl for TimeoutStopUSec. Use the manager hinted by our
+    # cgroup first: querying the wrong manager can still return rc=0 with
+    # LoadState=not-found and the default 90s timeout, which creates a false
+    # stale-unit warning for system-scope profile units.
     timeout_us: Optional[int] = None
-    for flag in (["--user"], []):
+    manager_flags = ([[], ["--user"]] if "/system.slice/" in cgroup_path else [["--user"], []])
+    for flag in manager_flags:
         try:
             result = subprocess.run(
-                ["systemctl", *flag, "show", unit_name, "--property=TimeoutStopUSec"],
+                [
+                    "systemctl",
+                    *flag,
+                    "show",
+                    unit_name,
+                    "--property=TimeoutStopUSec",
+                    "--property=LoadState",
+                ],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=2.0,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             continue
         if result.returncode != 0:
+            continue
+        if any(line.strip() == "LoadState=not-found" for line in result.stdout.splitlines()):
             continue
         # Output: "TimeoutStopUSec=1min 30s" or "TimeoutStopUSec=90000000"
         for line in result.stdout.splitlines():
