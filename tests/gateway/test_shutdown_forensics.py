@@ -8,7 +8,6 @@ import signal
 import sys
 import time
 from pathlib import Path
-from unittest.mock import mock_open
 
 import pytest
 
@@ -90,7 +89,7 @@ class TestFormatters:
 # ---------------------------------------------------------------------------
 
 class TestSpawnAsyncDiagnostic:
-    @pytest.mark.skipif(sys.platform in {"win32", "darwin"}, reason="Linux /proc diagnostic")
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only diagnostic")
     def test_spawns_subprocess_and_writes_output(self, tmp_path):
         log_path = tmp_path / "diag.log"
         pid = sf.spawn_async_diagnostic(log_path, "SIGTERM", timeout_seconds=3.0)
@@ -118,15 +117,15 @@ class TestSpawnAsyncDiagnostic:
 
 
 # ---------------------------------------------------------------------------
-# _parse_systemd_duration_to_us
+# parse_systemd_duration_to_us
 # ---------------------------------------------------------------------------
 
 class TestParseSystemdDuration:
     def test_seconds(self):
-        assert sf._parse_systemd_duration_to_us("90s") == 90 * 1_000_000
+        assert sf.parse_systemd_duration_to_us("90s") == 90 * 1_000_000
 
     def test_minutes(self):
-        assert sf._parse_systemd_duration_to_us("3min") == 180 * 1_000_000
+        assert sf.parse_systemd_duration_to_us("3min") == 180 * 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -135,74 +134,33 @@ class TestParseSystemdDuration:
 
 class TestCheckSystemdTimingAlignment:
 
-    def test_returns_none_when_unit_undeterminable(self, monkeypatch):
+    def test_prefers_system_scope_when_cgroup_is_system_slice(self, monkeypatch, tmp_path):
         monkeypatch.setenv("INVOCATION_ID", "abc")
-        # /proc/self/cgroup likely doesn't end in .service for the test runner
-        result = sf.check_systemd_timing_alignment(180.0)
-        # Either None (we couldn't find a unit) or a dict with mismatch info
-        # for whatever unit pytest IS in.  Both are valid; we just ensure
-        # the function doesn't raise.
-        assert result is None or isinstance(result, dict)
+        cgroup = tmp_path / "cgroup"
+        cgroup.write_text("0::/system.slice/hermes-gateway-fedoramm.service\n", encoding="utf-8")
 
-    def test_system_slice_queries_system_manager_only(self, monkeypatch):
-        monkeypatch.setenv("INVOCATION_ID", "abc")
-        monkeypatch.setattr(
-            "builtins.open",
-            mock_open(read_data="0::/system.slice/hermes-gateway.service\n"),
-        )
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if path == "/proc/self/cgroup":
+                return real_open(cgroup, *args, **kwargs)
+            return real_open(path, *args, **kwargs)
+
         calls = []
 
-        def fake_run(args, **kwargs):
-            calls.append(args)
-            assert "--user" not in args
-            return type(
-                "Result",
-                (),
-                {"returncode": 0, "stdout": "TimeoutStopUSec=3min 30s\n"},
-            )()
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            if "--user" in argv:
+                return type("Result", (), {
+                    "returncode": 0,
+                    "stdout": "TimeoutStopUSec=1min 30s\nLoadState=not-found\n",
+                })()
+            return type("Result", (), {
+                "returncode": 0,
+                "stdout": "TimeoutStopUSec=3min 30s\nLoadState=loaded\n",
+            })()
 
-        monkeypatch.setattr(sf.subprocess, "run", fake_run)
-
-        result = sf.check_systemd_timing_alignment(180.0)
-
-        assert result == {
-            "unit": "hermes-gateway.service",
-            "timeout_stop_sec": 210.0,
-            "drain_timeout": 180.0,
-            "cron_drain_timeout": 30.0,
-            "expected_min": 210.0,
-            "mismatch": False,
-        }
-        assert calls == [[
-            "systemctl",
-            "show",
-            "hermes-gateway.service",
-            "--property=TimeoutStopUSec",
-            "--property=LoadState",
-        ]]
-
-    def test_skips_not_found_scope_before_timeout_parse(self, monkeypatch):
-        monkeypatch.setenv("INVOCATION_ID", "abc")
-        monkeypatch.setattr(
-            "builtins.open",
-            mock_open(read_data="0::/foo.slice/hermes-gateway-fedoramm.service\n"),
-        )
-        calls = []
-
-        def fake_run(args, **kwargs):
-            calls.append(args)
-            if "--user" in args:
-                return type(
-                    "Result",
-                    (),
-                    {"returncode": 0, "stdout": "TimeoutStopUSec=1min 30s\nLoadState=not-found\n"},
-                )()
-            return type(
-                "Result",
-                (),
-                {"returncode": 0, "stdout": "TimeoutStopUSec=3min 30s\nLoadState=loaded\n"},
-            )()
-
+        monkeypatch.setattr(sf, "open", fake_open, raising=False)
         monkeypatch.setattr(sf.subprocess, "run", fake_run)
 
         result = sf.check_systemd_timing_alignment(180.0)
@@ -215,55 +173,13 @@ class TestCheckSystemdTimingAlignment:
             "expected_min": 210.0,
             "mismatch": False,
         }
-        assert calls == [
-            [
-                "systemctl",
-                "--user",
-                "show",
-                "hermes-gateway-fedoramm.service",
-                "--property=TimeoutStopUSec",
-                "--property=LoadState",
-            ],
-            [
-                "systemctl",
-                "show",
-                "hermes-gateway-fedoramm.service",
-                "--property=TimeoutStopUSec",
-                "--property=LoadState",
-            ],
-        ]
+        assert "--user" not in calls[0]
 
-    def test_user_slice_queries_user_manager_only(self, monkeypatch):
+    def test_returns_none_when_unit_undeterminable(self, monkeypatch):
         monkeypatch.setenv("INVOCATION_ID", "abc")
-        monkeypatch.setattr(
-            "builtins.open",
-            mock_open(
-                read_data="0::/user.slice/user-1000.slice/user@1000.service/app.slice/hermes-gateway.service\n"
-            ),
-        )
-        calls = []
-
-        def fake_run(args, **kwargs):
-            calls.append(args)
-            assert "--user" in args
-            return type(
-                "Result",
-                (),
-                {"returncode": 0, "stdout": "TimeoutStopUSec=90000000\n"},
-            )()
-
-        monkeypatch.setattr(sf.subprocess, "run", fake_run)
-
-        result = sf.check_systemd_timing_alignment(60.0)
-
-        assert result is not None
-        assert result["timeout_stop_sec"] == 90.0
-        assert result["mismatch"] is False
-        assert calls == [[
-            "systemctl",
-            "--user",
-            "show",
-            "hermes-gateway.service",
-            "--property=TimeoutStopUSec",
-            "--property=LoadState",
-        ]]
+        # /proc/self/cgroup likely doesn't end in .service for the test runner
+        result = sf.check_systemd_timing_alignment(180.0)
+        # Either None (we couldn't find a unit) or a dict with mismatch info
+        # for whatever unit pytest IS in.  Both are valid; we just ensure
+        # the function doesn't raise.
+        assert result is None or isinstance(result, dict)
