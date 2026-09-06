@@ -8989,6 +8989,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def show_banner(self):
         """Display the welcome banner in Claude Code style."""
+        from hermes_cli.banner import build_welcome_banner
+
         self.console.clear()
         ctx_len = None
         if hasattr(self, 'agent') and self.agent and hasattr(self.agent, 'context_compressor'):
