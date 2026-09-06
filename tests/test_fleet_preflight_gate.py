@@ -390,3 +390,67 @@ def test_compound_read_only_allowlist_still_blocks_git_pull(monkeypatch):
     assert decision.blocked is True
     assert decision.classified is True
     assert decision.mutation is True
+
+def test_scoped_cron_approval_allows_rollout_publish_and_upstream(monkeypatch):
+    approval = {
+        "job_id": "af5d2a9913d1",
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "allowed_actions": [
+            "git_publish_rollout_branch",
+            "git_set_upstream_rollout_branch",
+        ],
+        "scopes": {
+            "hosts": ["fedor"],
+            "repos": ["/usr/local/lib/hermes-agent"],
+        },
+        "approval": "operator approved rollout branch publication",
+        "evidence_target": "/home/wwolfy/.hermes/fleet/releases/patchkit/evidence.md",
+    }
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.setenv("HERMES_CRON_JOB_ID", "af5d2a9913d1")
+    monkeypatch.setenv("HERMES_CRON_FLEET_APPROVAL", json.dumps(approval))
+
+    publish = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {
+            "command": (
+                "ssh fedor cd /usr/local/lib/hermes-agent && "
+                "git push origin HEAD:refs/heads/rollout/runtime-provider-patchkit-20260826-fedor"
+            )
+        },
+        user_task="daily remote Hermes update",
+    )
+    upstream = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {
+            "command": (
+                "ssh fedor cd /usr/local/lib/hermes-agent && "
+                "git branch --set-upstream-to=origin/rollout/runtime-provider-patchkit-20260826-fedor "
+                "rollout/runtime-provider-patchkit-20260826-fedor"
+            )
+        },
+        user_task="daily remote Hermes update",
+    )
+    force_push = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {
+            "command": (
+                "ssh fedor cd /usr/local/lib/hermes-agent && "
+                "git push --force origin HEAD:refs/heads/rollout/runtime-provider-patchkit-20260826-fedor"
+            )
+        },
+        user_task="daily remote Hermes update",
+    )
+    main_push = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {
+            "command": "ssh fedor cd /usr/local/lib/hermes-agent && git push origin HEAD:refs/heads/main"
+        },
+        user_task="daily remote Hermes update",
+    )
+
+    assert publish.blocked is False
+    assert upstream.blocked is False
+    assert force_push.blocked is True
+    assert main_push.blocked is True
+

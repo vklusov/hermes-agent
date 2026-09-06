@@ -281,6 +281,8 @@ def _cron_approval_from_context() -> Mapping[str, Any] | None:
 
         raw = get_session_env(CRON_FLEET_APPROVAL_ENV, "")
     except Exception:
+        raw = ""
+    if not raw:
         raw = os.environ.get(CRON_FLEET_APPROVAL_ENV, "")
     if not raw:
         return None
@@ -310,6 +312,20 @@ def _cron_approval_valid(data: Mapping[str, Any] | None, tool_name: str, args: M
     elif "git_pull_ff_only" in allowed_actions and re.search(r"\bgit\s+pull\s+--ff-only\b", command):
         pass
     elif "install_editable" in allowed_actions and re.search(r"\buv\s+pip\s+install\s+-e\b|\bpip\s+install\s+-e\b", command):
+        pass
+    elif "git_publish_rollout_branch" in allowed_actions and re.search(
+        r"\bgit\s+push\s+origin\s+HEAD:refs/heads/rollout/[-A-Za-z0-9._/]+\b",
+        command,
+    ):
+        # Intentionally narrow: publishing the already-checked-out HEAD into
+        # the rollout namespace is the only push shape this cron approval can
+        # authorize. No force, no arbitrary remote, no main branch.
+        if re.search(r"\s--force(?:-with-lease)?\b|\s-[A-Za-z]*f[A-Za-z]*\b", command):
+            return False
+    elif "git_set_upstream_rollout_branch" in allowed_actions and re.search(
+        r"\bgit\s+branch\s+--set-upstream-to=origin/rollout/[-A-Za-z0-9._/]+\s+rollout/[-A-Za-z0-9._/]+\b",
+        command,
+    ):
         pass
     else:
         return False
