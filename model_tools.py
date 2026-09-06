@@ -696,6 +696,7 @@ def _apply_request_middleware(
 
 def _pre_dispatch_guards(function_name: str, function_args: Dict[str, Any], skip_pre_tool_call_hook: bool,
                          ids: _CallIds, middleware_trace: List[Dict[str, Any]],
+                         user_task: Optional[str] = None,
                          ) -> Tuple[Dict[str, Any], Optional[Tuple[Any, str, Optional[str]]]]:
     """Plugin pre_tool_call hook, then ACP edit approval.
 
@@ -879,7 +880,7 @@ def handle_function_call(
         if function_name in _AGENT_LOOP_TOOLS:
             return tool_error(f"{function_name} must be handled by the agent loop")
 
-        function_args, blocked = _pre_dispatch_guards(function_name, function_args, skip_pre_tool_call_hook, ids, trace)
+        function_args, blocked = _pre_dispatch_guards(function_name, function_args, skip_pre_tool_call_hook, ids, trace, user_task)
         if blocked is not None:
             result, error_type, error_message = blocked
             return _emit(result, status="blocked", error_type=error_type, error_message=error_message)

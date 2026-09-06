@@ -169,6 +169,7 @@ class TestCheckSystemdTimingAlignment:
             "unit": "hermes-gateway-fedoramm.service",
             "timeout_stop_sec": 210.0,
             "drain_timeout": 180.0,
+            "cron_drain_timeout": 30.0,
             "expected_min": 210.0,
             "mismatch": False,
         }
