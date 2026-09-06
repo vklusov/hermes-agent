@@ -347,6 +347,40 @@ def _marker_valid(data: Mapping[str, Any] | None) -> bool:
     )
 
 
+def _file_args_target_sensitive_hermes_path(args: Mapping[str, Any]) -> bool:
+    """True for file-tool targets that are actually Hermes/fleet state.
+
+    Do not run the broad fleet keyword regex over arbitrary temp paths: pytest
+    and CI commonly create directories containing ``hermes`` even for ordinary
+    project writes.  File mutations need native fleet preflight when they touch
+    the live Hermes home/source/config surfaces, or when the task/env already
+    says it is fleet work.
+    """
+
+    candidates = [str(args.get(k) or "").strip() for k in ("path", "file_path")]
+    for value in candidates:
+        if not value:
+            continue
+        try:
+            path = Path(value).expanduser().resolve()
+        except OSError:
+            path = Path(value).expanduser()
+        parts = {part.lower() for part in path.parts}
+        if ".hermes" in parts or "hermes-agent" in parts:
+            return True
+        if path.name in {"config.yaml", ".env", "jobs.json", "webhook_subscriptions.json"}:
+            return True
+    patch_text = str(args.get("patch") or "")
+    if patch_text:
+        # Patch payloads may not have a separate path field; classify only
+        # explicit Hermes/fleet target markers, not every prose mention.
+        if re.search(r"(?:^|[\s/])(?:\.hermes|hermes-agent)(?:[\s/:]|$)", patch_text, re.IGNORECASE):
+            return True
+        if re.search(r"^(?:\*\*\* Update File:|--- a/|\+\+\+ b/).*(?:config\.yaml|\.env|cron/jobs\.json)", patch_text, re.IGNORECASE | re.MULTILINE):
+            return True
+    return False
+
+
 def _classified_fleet_context(
     *,
     tool_name: str,
@@ -362,8 +396,7 @@ def _classified_fleet_context(
     if tool_name == "terminal" and _contains_fleet_context(str(args.get("command") or "")):
         return True
     if tool_name in _MUTATION_FILE_TOOLS:
-        haystack = "\n".join(str(args.get(k) or "") for k in ("path", "file_path", "patch"))
-        return _contains_fleet_context(haystack)
+        return _file_args_target_sensitive_hermes_path(args)
     return False
 
 

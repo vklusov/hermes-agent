@@ -122,6 +122,36 @@ def test_ordinary_non_fleet_write_stays_allowed(monkeypatch, tmp_path):
     assert result["ok"] is True
 
 
+
+def test_ordinary_write_under_hermes_named_temp_dir_stays_allowed(monkeypatch, tmp_path):
+    called = False
+    hermes_named_dir = tmp_path / "hermes-not-fleet"
+    hermes_named_dir.mkdir()
+    target = hermes_named_dir / "note.txt"
+
+    def fake_dispatch(name, args, **_kwargs):
+        nonlocal called
+        called = True
+        return json.dumps({"ok": True, "tool": name, "path": args.get("path")})
+
+    monkeypatch.delenv(PREFLIGHT_MARKER_ENV, raising=False)
+    monkeypatch.delenv("HERMES_FLEET_CHANGE_CONTEXT", raising=False)
+    monkeypatch.setattr(model_tools.registry, "dispatch", fake_dispatch)
+
+    result = _decode(
+        model_tools.handle_function_call(
+            "write_file",
+            {"path": str(target), "content": "hello"},
+            user_task="write a local project note",
+            skip_pre_tool_call_hook=True,
+            skip_tool_request_middleware=True,
+            skip_tool_execution_middleware=True,
+        )
+    )
+
+    assert called is True
+    assert result["ok"] is True
+
 def test_knowledge_vault_daily_write_stays_allowed(monkeypatch):
     called = False
     target = "/home/wwolfy/.hermes/knowledge/daily/2026-08-21.md"

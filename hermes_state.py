@@ -1368,3 +1368,8 @@ def __getattr__(name):  # PEP 562 — lazy so no import cycles
     warn_once(__name__, name, *target)
     return getattr(importlib.import_module(target[0]), target[1])
 # ---- END PLUGIN-COMPAT ----
+
+# Re-export shared SessionDB registry helpers for legacy callers.
+# The implementations live in hermes_state_registry to keep connection
+# lifecycle/cache code out of this module.
+from hermes_state_registry import get_shared_session_db, release_shared_session_db
