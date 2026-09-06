@@ -117,15 +117,15 @@ class TestSpawnAsyncDiagnostic:
 
 
 # ---------------------------------------------------------------------------
-# _parse_systemd_duration_to_us
+# parse_systemd_duration_to_us
 # ---------------------------------------------------------------------------
 
 class TestParseSystemdDuration:
     def test_seconds(self):
-        assert sf._parse_systemd_duration_to_us("90s") == 90 * 1_000_000
+        assert sf.parse_systemd_duration_to_us("90s") == 90 * 1_000_000
 
     def test_minutes(self):
-        assert sf._parse_systemd_duration_to_us("3min") == 180 * 1_000_000
+        assert sf.parse_systemd_duration_to_us("3min") == 180 * 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +169,7 @@ class TestCheckSystemdTimingAlignment:
             "unit": "hermes-gateway-fedoramm.service",
             "timeout_stop_sec": 210.0,
             "drain_timeout": 180.0,
+            "cron_drain_timeout": 30.0,
             "expected_min": 210.0,
             "mismatch": False,
         }
