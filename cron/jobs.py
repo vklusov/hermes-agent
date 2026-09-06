@@ -1952,6 +1952,23 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
                 _normalize_job_optional_text(updated.get("script")))
         if any(k in updates for k in _PAYLOAD_FIELDS) and job_payload_is_empty(updated):
             raise ValueError(EMPTY_PAYLOAD_ERROR)
+        from policy.fleet_gate import require_fleet_gate, scheduled_job_requires_fleet_gate
+        update_fleet_decision = updates.get("fleet_decision", job.get("fleet_decision"))
+        updated_skills = [str(item) for item in (updated.get("skills") or []) if item]
+        if not updated_skills and updated.get("skill"):
+            updated_skills = [str(updated["skill"])]
+        if scheduled_job_requires_fleet_gate(
+            prompt=str(updated.get("prompt") or ""),
+            script=updated.get("script"),
+            name=updated.get("name"),
+            workdir=updated.get("workdir"),
+            skills=updated_skills,
+        ):
+            updated["fleet_decision"] = require_fleet_gate(
+                update_fleet_decision,
+                action_class="scheduled_job_creation_or_update",
+                mutation=f"cron job update {job_id}",
+            ).to_dict()
         inference_fields_changed = bool(
             {"provider", "model", "base_url", "no_agent"}.intersection(updates)
         ) and _normalized_inference_axes(updated) != previous_inference_axes
