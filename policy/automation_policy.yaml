@@ -1,0 +1,238 @@
+schema_version: 1
+name: hermes-infra-automation-policy
+summary: Machine-readable standing gates for Hermes infrastructure routines.
+
+host_classes:
+  control-plane:
+    description: Production/control-plane Hermes node and coordination surfaces.
+    examples:
+      - Archivarius
+    allowed_tiers: [A, B]
+  worker:
+    description: Routine worker or staging Hermes runtime node.
+    examples:
+      - Fedor
+    allowed_tiers: [A, B]
+  monitoring:
+    description: Read-only observability, metrics, log, and alerting endpoints.
+    examples:
+      - Prometheus
+      - Grafana
+      - Alertmanager
+    allowed_tiers: [A, B]
+  mac-capability:
+    description: macOS gateway/capability gate node where VPN and local GUI state are high risk.
+    examples:
+      - mac93
+    allowed_tiers: [A, B]
+
+audit_requirements:
+  evidence_root: ~/.hermes/fleet/releases
+  required_fields:
+    - timestamp
+    - operator_or_run_id
+    - node
+    - host_class
+    - tier
+    - action_id
+    - command_or_tool
+    - before_snapshot
+    - after_snapshot
+    - result
+  snapshot_retention_days: 30
+  write_format: markdown_and_json
+
+native_fleet_gate:
+  mode: enforce_before_mutation
+  summary: Native/preflight guard for fleet-affecting Hermes mutations.
+  default_rollout_order:
+    - fedor
+    - "93"
+    - archivarius
+  fleet_affecting_action_classes:
+    - runtime_code_overlay
+    - scheduled_job_creation_or_update
+    - service_lifecycle
+    - provider_or_config_change
+    - cleanup_or_retention
+    - live_checkout_update
+  required_decision_fields:
+    - affected_nodes
+    - rollout_order
+    - approvals
+    - evidence_root
+    - result
+  exception_required_fields:
+    - exception
+    - exception_reason
+    - affected_nodes
+    - skipped_nodes
+    - approval_ref
+  allowed_exceptions:
+    - archivarius_only
+  on_missing_gate: block_and_create_kanban
+  policy_gap_card: t_ea6fc246
+  notes:
+    - Policy text and memory are advisory only; native/CLI/gateway/cron paths must record this decision before mutation.
+    - Archivarius-only mutations require explicit exception metadata that records why Fedor and 93 were skipped.
+
+package_allowlists:
+  python_readonly:
+    packages: []
+    tier: A
+    notes: Read-only Python stdlib/project inspection only; no installs.
+  dev_test_dependencies:
+    packages:
+      - pytest
+      - pytest-asyncio
+      - ruff
+      - ty
+    tier: B
+    notes: Existing project dev extra only; install/update requires snapshot and rollback pointer.
+
+service_allowlists:
+  read_only_status:
+    services:
+      - hermes-gateway
+      - hermes-tui
+      - hermes-cron
+      - prometheus
+      - grafana-server
+      - alertmanager
+    tier: A
+    allowed_operations:
+      - status
+      - logs_read
+      - health_probe
+  bounded_restart_rehearsal_only:
+    services: []
+    tier: B
+    allowed_operations: []
+    notes: Real service restart is not allowed by this Phase 1 policy.
+
+circuit_breaker_defaults:
+  max_attempts: 2
+  window_minutes: 30
+  cooldown_minutes: 60
+  on_trip: escalate_to_vadim
+  audit_event: circuit_breaker_trip
+
+tiers:
+  A:
+    mode: automatic
+    description: Fully automatic low-risk routines.
+    allowed_action_classes:
+      - read_only_audit
+      - deduplication
+      - rehearsal
+    requirements:
+      - no writes to target runtime state
+      - no service stop or restart
+      - no network route, VPN, firewall, secret, provider-primary-route, deletion, pruning, or dirty-checkout cleanup changes
+      - audit snapshot for any result used by later automation
+    allowed_actions:
+      - id: collect_host_facts
+        class: read_only_audit
+        host_classes: [control-plane, worker, monitoring, mac-capability]
+        commands:
+          - hostname
+          - uname
+          - df
+          - free
+          - git status --short --branch
+      - id: collect_service_status
+        class: read_only_audit
+        host_classes: [control-plane, worker, monitoring, mac-capability]
+        services: [hermes-gateway, hermes-tui, hermes-cron, prometheus, grafana-server, alertmanager]
+        operations: [status, logs_read, health_probe]
+      - id: deduplicate_evidence_snapshots
+        class: deduplication
+        host_classes: [control-plane, worker, monitoring, mac-capability]
+        scope: local_evidence_only
+      - id: dry_run_rehearsal
+        class: rehearsal
+        host_classes: [control-plane, worker, monitoring, mac-capability]
+        operations: [dry_run, diff_only, plan_only]
+  B:
+    mode: whitelisted_with_circuit_breaker
+    description: Bounded routines allowed only when explicitly whitelisted here and all gates are present.
+    inherited_circuit_breaker_defaults: true
+    required_per_action_fields:
+      - max_attempts
+      - window_minutes
+      - pre_action_snapshot
+      - post_check
+      - rollback_pointer
+      - escalation_rule
+    allowed_actions:
+      - id: rotate_old_audit_snapshots_with_retention_policy
+        description: Prune local audit snapshots only when a written retention policy and manifest exist.
+        host_classes: [control-plane, worker, monitoring]
+        packages: []
+        services: []
+        max_attempts: 1
+        window_minutes: 1440
+        pre_action_snapshot: Record manifest path, retention policy path, candidate files, sizes, mtimes, and backup pointer.
+        post_check: Verify retained manifest, remaining evidence index, and free-space delta.
+        rollback_pointer: Restore from named backup/archive path captured in the snapshot.
+        escalation_rule: Stop and ask Vadim on missing retention policy, missing backup, unexpected file class, or any deletion failure.
+      - id: install_project_dev_dependencies_for_validation
+        description: Install pinned project dev/test dependencies in an isolated task workspace only.
+        host_classes: [worker]
+        packages: [pytest, pytest-asyncio, ruff, ty]
+        services: []
+        max_attempts: 2
+        window_minutes: 30
+        pre_action_snapshot: Capture pyproject.toml, uv.lock hash, current virtualenv path, and package list before install.
+        post_check: Run targeted validation command and record package diff.
+        rollback_pointer: Remove the isolated task virtualenv or restore the captured environment from backup.
+        escalation_rule: Stop on dependency resolution drift, unpinned package request, global environment write, or second failure in the window.
+      - id: update_policy_data_in_worktree
+        description: Edit machine-readable policy or validation data in a git worktree; credential files remain out of scope.
+        host_classes: [worker]
+        packages: []
+        services: []
+        max_attempts: 2
+        window_minutes: 60
+        pre_action_snapshot: Capture git status, HEAD, target file hash, and diff before editing.
+        post_check: Run policy validator and targeted tests; capture git diff.
+        rollback_pointer: Revert worktree diff or restore target file from pre-action hash backup.
+        escalation_rule: Stop on dirty-checkout cleanup request, secret/env edit, service restart need, or validator failure that cannot be fixed without widening Tier B.
+  C:
+    mode: ask_vadim
+    description: High-risk or explicitly denied actions; never automatic.
+    requirements:
+      - human approval before action
+      - explicit scope and rollback plan
+      - fresh preflight/audit snapshot
+      - post-action verification
+
+denylist:
+  - id: reboot_or_power_cycle
+    tier: C
+    requires: ask_vadim
+    patterns: [reboot, poweroff, shutdown, restart host, power cycle]
+  - id: vpn_tailscale_amnezia_or_route_change
+    tier: C
+    requires: ask_vadim
+    patterns: [vpn, tailscale, tailscaled, amnezia, route, resolvectl, dns route]
+  - id: firewall_change
+    tier: C
+    requires: ask_vadim
+    patterns: [firewall, ufw, iptables, nft, pfctl, security group]
+  - id: secrets_or_env_edit
+    tier: C
+    requires: ask_vadim
+    patterns: [.env, secret, token, credential, api key, provider key]
+  - id: provider_primary_route_change
+    tier: C
+    requires: ask_vadim
+    patterns: [primary provider, main route, default model, provider routing, fallback chain]
+  - id: deletion_or_pruning_without_retention_policy
+    tier: C
+    requires: ask_vadim
+    patterns: [rm -rf, delete, prune, cleanup, retention missing, truncate]
+  - id: dirty_checkout_cleanup
+    tier: C
+    requires: ask_vadim
+    patterns: [git reset --hard, git clean, dirty checkout, discard changes, remove overlay]
