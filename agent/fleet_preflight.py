@@ -49,8 +49,10 @@ _TERMINAL_MUTATION_RE = re.compile(
     r"\bdocker\s+(?:compose\s+)?(?:restart|stop|rm|down)\b|"
     r"\bhermes\s+(?:gateway\s+)?(?:restart|stop|update|config\s+set)\b|"
     r"\b(?:python\s+-c|perl\s+-pi|sed\s+-i)\b|"
-    r"\bcat\s*>|>>?|"
-    r"\bgit\s+(?:clean|reset|checkout|switch|pull|merge|rebase|commit|push)\b"
+    r"\bcat\s*>(?!\s*&)(?!/dev/null)(?!/dev/stdout)(?!/dev/stderr)|"
+    r">>?(?!\s*&)(?!/dev/null)(?!/dev/stdout)(?!/dev/stderr)|"
+    r"\bgit\s+(?:-(?:C|C\s+\S+|git-dir=\S+)\s+)?(?:clean|reset|checkout|switch|pull|merge|rebase|commit|push)\b|"
+    r"\bfind\b[^|;&]*?-(?:delete|exec|execdir|ok)\b"
     r")",
     re.IGNORECASE,
 )
@@ -147,7 +149,9 @@ def _terminal_read_only_audit_command(command: str) -> bool:
         return False
     if words[0] == "git" and len(words) >= 2:
         sub = words[1]
-        if sub in {"rev-parse", "rev-list", "log", "show", "branch", "remote"}:
+        if sub in {"-C", "--git-dir"} and len(words) >= 4:
+            sub = words[3]
+        if sub in {"rev-parse", "rev-list", "log", "show", "branch", "remote", "ls-remote"}:
             return True
         if sub == "diff":
             return True
@@ -200,23 +204,25 @@ def _terminal_contains_allowed_read_only_audit(command: str) -> bool:
         r"\b(?:rm|unlink|rmdir|truncate|mv|cp|install|chmod|chown|tee|apply_patch)\b",
         r"\b(?:python\s+-c|perl\s+-pi|sed\s+-i)\b",
         r"\bcat\s*>",
-        r"\bgit\s+(?:clean|reset|checkout|switch|pull|merge|rebase|commit|push|cherry-pick)\b",
+        r"\bgit\s+(?:-(?:C|C\s+\S+|git-dir=\S+)\s+)?(?:clean|reset|checkout|switch|pull|merge|rebase|commit|push|cherry-pick)\b",
         r"\b(?:apt|dnf|yum|brew|pip|uv\s+pip)\s+(?:install|remove|upgrade|update)\b",
+        r"\bfind\s+(?:.*\s)?(?:-delete|-exec|-execdir|-ok)\b",
     )
     if any(re.search(pattern, lowered, re.IGNORECASE) for pattern in hard_denies):
         return False
 
     # Require a recognizable read-only audit anchor.
     if not re.search(r"\bssh\b", lowered) and not re.search(
-        r"\bgit\s+(?:status|diff|rev-parse|rev-list|log|show|branch|remote)\b", lowered
-    ):
+        r"\bgit\s+(?:status|diff|rev-parse|rev-list|log|show|branch|remote|ls-remote)\b", lowered
+    ) and not re.search(r"\b(?:find|ls)\b", lowered):
         return False
 
     allowed_commands = {
         "ssh", "set", "echo", "cd", "date", "hostname", "id", "git",
         "df", "pgrep", "grep", "true", "false", "command", "test",
         "pwd", "printf", "uname", "lsblk", "findmnt", "pvs", "vgs",
-        "lvs", "stat", "getent", "ps", "curl",
+        "lvs", "stat", "getent", "ps", "curl", "find", "ls", "head",
+        "tail", "wc", "uniq", "sort", "cut",
     }
     # Check only command-position words, not arguments/paths.
     for match in re.finditer(r"(?:^|[;&|()])\s*([A-Za-z_][A-Za-z0-9_.-]*)", command):
@@ -246,9 +252,20 @@ def _terminal_read_only_service_query(command: str) -> bool:
         words = remote
     # A quoted ssh-remote segment survives shlex.split as ONE token with
     # embedded spaces ('systemctl --user status hermes-gateway'). Split it
-    # back into words so the verb scanner below sees real tokens.
-    if len(words) == 1 and " " in words[0]:
-        words = shlex.split(words[0])
+    # back into words so the verb scanner below sees real tokens. Trailing
+    # shell glue (2>&1, 2>/dev/null, | head, &&, ;) belongs to the local
+    # wrapper, not to the remote service verb, so drop it before scanning.
+    _GLUE = {"2>&1", "1>&2", "2>/dev/null", ">/dev/null", "2>", ">",
+             "|", "||", "&&", ";", "2>&1|head", }
+    cleaned: list[str] = []
+    for token in words:
+        if token in _GLUE or token.startswith(("2>&", "2>/dev/null", ">/dev/null")):
+            continue
+        if " " in token:
+            cleaned.extend(shlex.split(token))
+        else:
+            cleaned.append(token)
+    words = cleaned
     words = _strip_safe_prefix(_trim_cd_prefix(words))
     if not words:
         return False
@@ -375,14 +392,14 @@ def _cron_approval_valid(data: Mapping[str, Any] | None, tool_name: str, args: M
     allowed_actions = {str(a).strip().lower() for a in data.get("allowed_actions") or []}
     if not allowed_actions:
         return False
-    if "git_fetch" in allowed_actions and re.search(r"\bgit\s+fetch\b", command):
+    if "git_fetch" in allowed_actions and re.search(r"\bgit\s+(?:-(?:C|C\s+\S+|git-dir=\S+)\s+)?fetch\b", command):
         pass
-    elif "git_pull_ff_only" in allowed_actions and re.search(r"\bgit\s+pull\s+--ff-only\b", command):
+    elif "git_pull_ff_only" in allowed_actions and re.search(r"\bgit\s+(?:-(?:C|C\s+\S+|git-dir=\S+)\s+)?pull\s+--ff-only\b", command):
         pass
     elif "install_editable" in allowed_actions and re.search(r"\buv\s+pip\s+install\s+-e\b|\bpip\s+install\s+-e\b", command):
         pass
     elif "git_publish_rollout_branch" in allowed_actions and re.search(
-        r"\bgit\s+push\s+origin\s+HEAD:refs/heads/rollout/[-A-Za-z0-9._/]+\b",
+        r"\bgit\s+(?:-(?:C|C\s+\S+|git-dir=\S+)\s+)?push\s+origin\s+HEAD:refs/heads/rollout/[-A-Za-z0-9._/]+\b",
         command,
     ):
         # Intentionally narrow: publishing the already-checked-out HEAD into
@@ -391,7 +408,7 @@ def _cron_approval_valid(data: Mapping[str, Any] | None, tool_name: str, args: M
         if re.search(r"\s--force(?:-with-lease)?\b|\s-[A-Za-z]*f[A-Za-z]*\b", command):
             return False
     elif "git_set_upstream_rollout_branch" in allowed_actions and re.search(
-        r"\bgit\s+branch\s+--set-upstream-to=origin/rollout/[-A-Za-z0-9._/]+\s+rollout/[-A-Za-z0-9._/]+\b",
+        r"\bgit\s+(?:-(?:C|C\s+\S+|git-dir=\S+)\s+)?branch\s+--set-upstream-to=origin/rollout/[-A-Za-z0-9._/]+\s+rollout/[-A-Za-z0-9._/]+\b",
         command,
     ):
         pass

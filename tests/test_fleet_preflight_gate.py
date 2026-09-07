@@ -525,3 +525,82 @@ def test_service_lifecycle_verbs_still_blocked_without_marker(monkeypatch):
         assert decision.blocked is True
         assert decision.classified is True
         assert decision.mutation is True
+
+
+def test_read_only_commands_with_redirects_allowed_without_marker(monkeypatch):
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.delenv("HERMES_FLEET_CHANGE_CONTEXT", raising=False)
+
+    for command in (
+        # redirects must NOT be treated as file-write mutations
+        "git ls-remote https://github.com/NousResearch/hermes-agent.git 2>&1",
+        "git ls-remote https://github.com/NousResearch/hermes-agent.git 2>/dev/null",
+        "curl -sSf http://100.92.229.56:8001/health 2>&1",
+        "curl -sSf http://192.168.1.93:8002/health 2>/dev/null",
+        # read-only find/ls
+        "find ~/.hermes/fleet -maxdepth 1 -type f 2>&1",
+        "ls -la ~/.hermes/fleet/ 2>&1",
+        # quoted ssh service query with trailing redirect glue
+        "ssh root@100.92.229.56 'systemctl --user status hermes-gateway' 2>&1",
+        "ssh vadimklusov@192.168.1.93 'launchctl list' 2>&1",
+        # git -C read-only forms over ssh
+        "ssh root@100.92.229.56 'git -C /usr/local/lib/hermes-agent status --porcelain=v2 --branch' 2>&1",
+        "ssh root@100.92.229.56 'git -C /usr/local/lib/hermes-agent rev-list --count HEAD' 2>&1",
+        # private ssh diagnostics
+        "ssh -i ~/.ssh/id_ed25519_archivarius root@100.92.229.56 'echo hi' 2>&1",
+    ):
+        decision = fleet_preflight.check_fleet_preflight(
+            "terminal",
+            {"command": command},
+            user_task="daily remote Hermes update audit",
+        )
+        assert decision.blocked is False, command
+        assert decision.classified is True, command
+        assert decision.mutation is False, command
+
+
+def test_git_dash_c_and_destructive_find_still_blocked(monkeypatch):
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.delenv("HERMES_FLEET_CHANGE_CONTEXT", raising=False)
+    monkeypatch.delenv("HERMES_CRON_FLEET_APPROVAL", raising=False)
+    monkeypatch.delenv("HERMES_CRON_JOB_ID", raising=False)
+
+    for command in (
+        # git -C forms must still be recognized as mutations
+        "git -C /usr/local/lib/hermes-agent pull --ff-only",
+        "git -C /usr/local/lib/hermes-agent reset --hard HEAD",
+        "git --git-dir=/usr/local/lib/hermes-agent/.git pull --ff-only",
+        "ssh root@100.92.229.56 'git -C /usr/local/lib/hermes-agent pull --ff-only'",
+        "git -C /usr/local/lib/hermes-agent push origin HEAD:refs/heads/rollout/test",
+        # destructive find forms
+        "find /tmp -delete",
+        "find /tmp -name '*.pyc' -delete",
+        "find /usr/local/lib/hermes-agent -name '*.pyc' -exec rm {} \\;",
+        "find /tmp -name '*.tmp' -ok rm {} \\;",
+        # ordinary redirect mutation still blocked
+        "echo x > /tmp/out.txt",
+        "cat > /tmp/out.txt",
+    ):
+        decision = fleet_preflight.check_fleet_preflight(
+            "terminal",
+            {"command": command},
+            user_task="daily remote Hermes update",
+        )
+        assert decision.blocked is True, command
+        assert decision.classified is True, command
+        assert decision.mutation is True, command
+
+
+def test_mutation_regex_has_no_accidental_empty_alternation(monkeypatch):
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.delenv("HERMES_FLEET_CHANGE_CONTEXT", raising=False)
+
+    # An accidental trailing '|' before ')' in the alternation used to match
+    # ANY command as a mutation; a benign non-fleet command must stay clean.
+    decision = fleet_preflight.check_fleet_preflight(
+        "terminal",
+        {"command": "echo hello"},
+        user_task="compose a friendly message",
+    )
+    assert decision.mutation is False
+    assert decision.blocked is False
