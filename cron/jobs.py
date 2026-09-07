@@ -1750,6 +1750,7 @@ def create_job(
     monitor_script: Optional[str] = None,
     monitor_url: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
+    fleet_decision: Optional[Dict[str, Any]] = None,
     failure_deliver: Optional[str] = None,
     paused: bool = False,
     paused_reason: Optional[str] = None,
@@ -1804,6 +1805,24 @@ def create_job(
     name = name or label_source[:50].strip()
     if pinned and not f["model"]:
         f["provider"], f["model"] = _main_model_pin()
+
+    from policy.fleet_gate import require_fleet_gate, scheduled_job_requires_fleet_gate
+    normalized_fleet_decision = None
+    if scheduled_job_requires_fleet_gate(
+        prompt=prompt_text,
+        script=f.get("script"),
+        name=name or label_source,
+        workdir=f.get("workdir"),
+        skills=normalized_skills,
+    ):
+        normalized_fleet_decision = require_fleet_gate(
+            fleet_decision,
+            action_class="scheduled_job_creation_or_update",
+            mutation="cron job creation",
+        ).to_dict()
+
+    provider_snapshot, model_snapshot = _compute_provider_model_snapshots(
+        provider=f["provider"], model=f["model"], base_url=f["base_url"], no_agent=f["no_agent"])
     next_run_at = _next_run_or_reject_past_oneshot(parsed_schedule, name, schedule, "")
 
     job = {
@@ -1842,6 +1861,8 @@ def create_job(
         "enabled_toolsets": f["enabled_toolsets"],
         "workdir": f["workdir"],
     }
+    if normalized_fleet_decision is not None:
+        job["fleet_decision"] = normalized_fleet_decision
     # Optional keys are persisted only when explicitly set: an absent key falls back to global
     # config (attach/reasoning) or to ``deliver`` (failure_deliver), byte-identical to pre-feature
     # jobs.
@@ -2044,6 +2065,28 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
                 _normalize_job_optional_text(updated.get("script")))
         if any(k in updates for k in _PAYLOAD_FIELDS) and job_payload_is_empty(updated):
             raise ValueError(EMPTY_PAYLOAD_ERROR)
+
+        from policy.fleet_gate import require_fleet_gate, scheduled_job_requires_fleet_gate
+        _update_fleet_decision = updates.get("fleet_decision", job.get("fleet_decision"))
+        _updated_skills = [str(item) for item in (updated.get("skills") or []) if item]
+        if not _updated_skills and updated.get("skill"):
+            _updated_skills = [str(updated["skill"])]
+        if scheduled_job_requires_fleet_gate(
+            prompt=str(updated.get("prompt") or ""),
+            script=updated.get("script"),
+            name=updated.get("name"),
+            workdir=updated.get("workdir"),
+            skills=_updated_skills,
+        ):
+            updated["fleet_decision"] = require_fleet_gate(
+                _update_fleet_decision,
+                action_class="scheduled_job_creation_or_update",
+                mutation=f"cron job update {job_id}",
+            ).to_dict()
+        inference_fields_changed = bool(
+            {"provider", "model", "base_url", "no_agent"}.intersection(updates)
+        ) and _normalized_inference_axes(updated) != previous_inference_axes
+
         if "schedule" in updates:
             _apply_schedule_update(updated, updates, job_id)
             # next_run_at now follows the new schedule; a stale quota_hold_until would only shield
