@@ -864,6 +864,30 @@ def handle_function_call(
             except Exception:
                 pass  # file_tools may not be loaded yet
 
+        # carried patchkit: native fleet preflight guard (fail-closed on mutations).
+        try:
+            from agent.fleet_preflight import check_fleet_preflight
+            fleet_preflight = check_fleet_preflight(function_name, function_args, user_task=user_task)
+            if fleet_preflight.blocked:
+                result = tool_error(
+                    fleet_preflight.message,
+                    error_type="fleet_preflight_required",
+                    classified_fleet_context=True,
+                    mutation=True,
+                    marker_path=fleet_preflight.marker_path,
+                )
+                return _emit(result, status="blocked", error_type="fleet_preflight_required",
+                             error_message=fleet_preflight.message)
+        except Exception as _fleet_preflight_err:
+            logger.debug("fleet preflight guard error: %s", _fleet_preflight_err)
+            if function_name in {"terminal", "write_file", "patch", "ha_call_service"}:
+                result = tool_error(
+                    "Fleet-change preflight guard failed closed before mutation",
+                    error_type="fleet_preflight_guard_error",
+                )
+                return _emit(result, status="blocked", error_type="fleet_preflight_guard_error",
+                             error_message="Fleet-change preflight guard failed closed before mutation")
+
         # duration_ms (monotonic) is exposed to post_tool_call / transform_tool_result.
         start = time.monotonic()
         result = _execute_tool(function_name, function_args, original_args, ids, user_task=user_task,

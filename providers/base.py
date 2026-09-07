@@ -205,6 +205,15 @@ class ProviderProfile:
         """
         return self.default_max_tokens
 
+    def get_model_api_mode(self, model: str | None) -> str | None:
+        """Return the API mode this provider uses for *model*, if model-specific.
+
+        Most providers expose one transport for all models and should leave this
+        unset. Multi-transport relays can override it so runtime resolution uses
+        the selected model's wire format instead of a stale persisted
+        ``model.api_mode`` from another model on the same provider.
+        """
+        return N
     def supported_reasoning_efforts(
         self, model: str | None
     ) -> tuple[str, ...] | None:

@@ -37,6 +37,68 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+
+# ── carried patchkit: preserve custom provider model intent ──────────────────────────
+
+
+def _provider_profile_model_api_mode(provider: str, model: Any) -> Optional[str]:
+    """Return a provider-profile per-model api_mode override, if declared."""
+    provider_name = (provider or "").strip().lower()
+    model_name = str(model or "").strip()
+    if not provider_name or not model_name:
+        return None
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(provider_name)
+        if profile is None:
+            return None
+        get_mode = getattr(profile, "get_model_api_mode", None)
+        if callable(get_mode):
+            rp = _rp()
+            return rp._parse_api_mode(get_mode(model_name))
+    except Exception:
+        return None
+    return None
+
+
+def _custom_provider_serves_model(custom_provider: Dict[str, Any], model: Optional[str]) -> bool:
+    """Return True when a custom provider should accept ``model``.
+
+    If the provider publishes a ``models`` catalog, only advertised target
+    models may override the provider default. Legacy/custom endpoints without a
+    catalog preserve the existing contract: an explicit target model wins.
+    """
+    target = str(model or "").strip().lower()
+    if not target:
+        return False
+    models = custom_provider.get("models")
+    if not isinstance(models, (dict, list)):
+        return True
+    for key in ("model", "default_model"):
+        value = custom_provider.get(key)
+        if isinstance(value, str) and value.strip().lower() == target:
+            return True
+    if isinstance(models, dict):
+        return any(str(mid).strip().lower() == target for mid in models.keys())
+    for item in models:
+        if isinstance(item, str) and item.strip().lower() == target:
+            return True
+        if isinstance(item, dict):
+            mid = item.get("id") or item.get("name")
+            if isinstance(mid, str) and mid.strip().lower() == target:
+                return True
+    return False
+
+
+def _custom_provider_effective_model(
+    custom_provider: Dict[str, Any],
+    target_model: Optional[str],
+) -> str:
+    if _custom_provider_serves_model(custom_provider, target_model):
+        return str(target_model or "").strip()
+    return str(custom_provider.get("model", "") or "").strip()
+
 def _entry_url(entry: Dict[str, Any]) -> str:
     return entry.get("api") or entry.get("url") or entry.get("base_url") or ""
 
@@ -153,6 +215,9 @@ def _match_legacy_custom_provider(requested_norm: str, custom_providers) -> Opti
         model_name = _clean(entry.get("model", ""))
         if model_name:
             result["model"] = model_name
+        models = entry.get("models")
+        if isinstance(models, (dict, list)):
+            result["models"] = models
         _lift_common_custom_fields(entry, result, provider_key=provider_key, key_env=_clean(entry.get("key_env", "")),
                                    api_mode=_rp()._parse_api_mode(entry.get("api_mode")))
         return result
@@ -362,10 +427,19 @@ def _apply_custom_provider_extras(custom_provider: Dict[str, Any], target_model:
     resolved custom runtime. An explicit ``target_model`` wins over the provider's configured
     default (auxiliary slots / background-review resolve a concrete model and must not fall back to
     ``default_model``). ``extra_headers`` may carry credentials — NEVER log them."""
-    model_name = target_model or custom_provider.get("model")
+    model_name = _custom_provider_effective_model(custom_provider, target_model)
     if model_name:
         result["model"] = model_name
     _lift_model_capabilities(custom_provider, model_name, result)
+    # carried patchkit: per-model api_mode override from provider profile. It wins over a
+    # static provider-wide api_mode because multi-transport relays serve different models on
+    # different wire formats (original intent of fix(runtime): preserve custom provider model intent).
+    profile_mode = _provider_profile_model_api_mode(
+        str(custom_provider.get("provider_key") or custom_provider.get("name") or ""),
+        model_name,
+    )
+    if profile_mode:
+        result["api_mode"] = profile_mode
 
     if custom_provider.get("extra_headers"):
         result["extra_headers"] = dict(custom_provider["extra_headers"])
