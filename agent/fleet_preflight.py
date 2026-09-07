@@ -14,6 +14,7 @@ from pathlib import Path
 import json
 import os
 import re
+import shlex
 from typing import Any, Mapping
 
 
@@ -228,6 +229,71 @@ def _terminal_contains_allowed_read_only_audit(command: str) -> bool:
     return True
 
 
+
+def _terminal_read_only_service_query(command: str) -> bool:
+    """Recognize read-only service status/list queries used by fleet health checks.
+
+    Health postflight legitimately runs ``systemctl status`` / ``launchctl list``
+    on remote worker hosts.  Treat ONLY those pure status/list shapes as
+    read-only; lifecycle verbs (restart/stop/start/reload/enable/mask/load/
+    kickstart/...) remain mutations.  Accepts an optional ssh wrapper and
+    optional env-assignment prefixes like the git audit helper above.
+    """
+
+    words = _strip_safe_prefix(_shell_words(command))
+    remote = _split_ssh_remote_words(words)
+    if remote is not None and remote:
+        words = remote
+    # A quoted ssh-remote segment survives shlex.split as ONE token with
+    # embedded spaces ('systemctl --user status hermes-gateway'). Split it
+    # back into words so the verb scanner below sees real tokens.
+    if len(words) == 1 and " " in words[0]:
+        words = shlex.split(words[0])
+    words = _strip_safe_prefix(_trim_cd_prefix(words))
+    if not words:
+        return False
+
+    def _systemctl_read_only(tokens: list[str]) -> bool:
+        if not tokens or tokens[0] != "systemctl":
+            return False
+        if len(tokens) < 2:
+            return False
+        # Normalize optional flags like --user / --system before the verb.
+        idx = 1
+        while idx < len(tokens) and tokens[idx].startswith("-"):
+            idx += 1
+        if idx >= len(tokens):
+            return False
+        verb = tokens[idx]
+        # Pure status/is-active/is-enabled/show/list queries are read-only.
+        if verb in {
+            "status", "is-active", "is-enabled", "is-failed", "show",
+            "list-units", "list-unit-files", "list-timers", "list-sockets",
+            "list-jobs", "list-machines", "get-default",
+        }:
+            return True
+        # A lifecycle verb is a mutation; never pass it as read-only.
+        return False
+
+    def _launchctl_read_only(tokens: list[str]) -> bool:
+        if not tokens or tokens[0] != "launchctl":
+            return False
+        if len(tokens) < 2:
+            return False
+        verb = tokens[1]
+        # list is the standard health query (optionally filtered); print* are
+        # informational. Everything else (start/stop/kickstart/load/unload/
+        # enable/disable/...) stays a mutation.
+        return verb in {"list", "print", "print-disabled", "help", "version"}
+
+    first = words[0]
+    if first == "systemctl":
+        return _systemctl_read_only(words)
+    if first == "launchctl":
+        return _launchctl_read_only(words)
+    return False
+
+
 def _terminal_is_mutation(args: Mapping[str, Any]) -> bool:
     command = str(args.get("command") or "")
     if not command.strip():
@@ -237,6 +303,8 @@ def _terminal_is_mutation(args: Mapping[str, Any]) -> bool:
     if _terminal_read_only_audit_command(command):
         return False
     if _terminal_contains_allowed_read_only_audit(command):
+        return False
+    if _terminal_read_only_service_query(command):
         return False
     return bool(_TERMINAL_MUTATION_RE.search(command))
 

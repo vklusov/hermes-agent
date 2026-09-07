@@ -484,3 +484,44 @@ def test_scoped_cron_approval_allows_rollout_publish_and_upstream(monkeypatch):
     assert force_push.blocked is True
     assert main_push.blocked is True
 
+def test_read_only_service_status_allowed_without_marker(monkeypatch):
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.delenv("HERMES_FLEET_CHANGE_CONTEXT", raising=False)
+
+    for command in (
+        "ssh root@100.92.229.56 'systemctl --user status hermes-gateway'",
+        "ssh vadimklusov@192.168.1.93 'launchctl list | grep com.hermes'",
+        "ssh root@100.92.229.56 'systemctl --user is-active hermes-gateway'",
+        "ssh vadimklusov@192.168.1.93 'launchctl print system/com.hermes.gateway'",
+    ):
+        decision = fleet_preflight.check_fleet_preflight(
+            "terminal",
+            {"command": command},
+            user_task="daily remote Hermes update postflight",
+        )
+        assert decision.blocked is False
+        assert decision.classified is True
+        assert decision.mutation is False
+
+
+def test_service_lifecycle_verbs_still_blocked_without_marker(monkeypatch):
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.delenv("HERMES_FLEET_CHANGE_CONTEXT", raising=False)
+    monkeypatch.delenv("HERMES_CRON_FLEET_APPROVAL", raising=False)
+    monkeypatch.delenv("HERMES_CRON_JOB_ID", raising=False)
+
+    for command in (
+        "ssh root@100.92.229.56 'systemctl --user restart hermes-gateway'",
+        "ssh root@100.92.229.56 'systemctl --user stop hermes-gateway'",
+        "ssh vadimklusov@192.168.1.93 'launchctl kickstart -k system/com.hermes.gateway'",
+        "ssh vadimklusov@192.168.1.93 'launchctl load /Library/LaunchDaemons/com.hermes.gateway.plist'",
+        "ssh root@100.92.229.56 'systemctl'",
+    ):
+        decision = fleet_preflight.check_fleet_preflight(
+            "terminal",
+            {"command": command},
+            user_task="daily remote Hermes update",
+        )
+        assert decision.blocked is True
+        assert decision.classified is True
+        assert decision.mutation is True
