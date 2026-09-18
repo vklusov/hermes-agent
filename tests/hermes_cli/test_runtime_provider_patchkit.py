@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import providers
 from hermes_cli import runtime_provider as rp
+from hermes_cli import runtime_provider_custom as rpc
 
 
 def _no_env(name, default=""):
@@ -29,7 +30,7 @@ def test_named_custom_provider_honors_advertised_target_model(monkeypatch):
     monkeypatch.setattr(rp, "load_config", lambda: config)
     monkeypatch.setattr(rp, "_get_model_config", lambda: config["model"])
     monkeypatch.setattr(rp, "load_pool", lambda _pool_key: SimpleNamespace(has_credentials=lambda: False))
-    monkeypatch.setattr(rp, "_getenv", _no_env)
+    monkeypatch.setattr(rpc, "get_secret_str", _no_env)
 
     resolved = rp.resolve_runtime_provider(
         requested="custom:cockpit-codex",
@@ -57,7 +58,7 @@ def test_named_custom_provider_falls_back_to_default_for_unknown_target(monkeypa
     monkeypatch.setattr(rp, "load_config", lambda: config)
     monkeypatch.setattr(rp, "_get_model_config", lambda: config["model"])
     monkeypatch.setattr(rp, "load_pool", lambda _pool_key: SimpleNamespace(has_credentials=lambda: False))
-    monkeypatch.setattr(rp, "_getenv", _no_env)
+    monkeypatch.setattr(rpc, "get_secret_str", _no_env)
 
     resolved = rp.resolve_runtime_provider(
         requested="custom:cockpit-codex",
@@ -95,7 +96,7 @@ def test_provider_profile_per_model_api_mode_overrides_configured_mode(monkeypat
     monkeypatch.setattr(rp, "load_config", lambda: config)
     monkeypatch.setattr(rp, "_get_model_config", lambda: config["model"])
     monkeypatch.setattr(rp, "load_pool", lambda _pool_key: SimpleNamespace(has_credentials=lambda: False))
-    monkeypatch.setattr(rp, "_getenv", _no_env)
+    monkeypatch.setattr(rpc, "get_secret_str", _no_env)
     monkeypatch.setattr(providers, "get_provider_profile", lambda provider: Profile() if provider == "cockpit-codex" else None)
 
     resolved = rp.resolve_runtime_provider(
