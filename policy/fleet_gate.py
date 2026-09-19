@@ -166,10 +166,14 @@ def evaluate_fleet_gate(
     if missing:
         return FleetGateResult(False, f"missing rollout fields: {missing}", gate["mode"], required)
 
-    if dec.rollout_order != gate["default_rollout_order"]:
+    default_order = list(gate["default_rollout_order"])
+    if dec.rollout_order != default_order:
         return FleetGateResult(False, "rollout_order must be fedor -> 93 -> archivarius", gate["mode"], required)
-    if dec.affected_nodes != gate["default_rollout_order"]:
-        return FleetGateResult(False, "affected_nodes must match full staged fleet order", gate["mode"], required)
+    if not dec.affected_nodes:
+        return FleetGateResult(False, "affected_nodes must not be empty", gate["mode"], required)
+    expected_prefix = default_order[: len(dec.affected_nodes)]
+    if dec.affected_nodes != expected_prefix:
+        return FleetGateResult(False, "affected_nodes must follow staged prefix fedor -> 93 -> archivarius", gate["mode"], required)
 
     return FleetGateResult(True, "staged_rollout_recorded", gate["mode"], required)
 

@@ -28,6 +28,57 @@ def test_native_gate_allows_recorded_full_rollout_decision():
     assert result.reason == "staged_rollout_recorded"
 
 
+
+def test_native_gate_allows_fedor_only_canary_as_staged_prefix():
+    result = evaluate_fleet_gate(
+        {
+            "action_class": "scheduled_job_creation_or_update",
+            "affected_nodes": ["fedor"],
+            "rollout_order": ["fedor", "93", "archivarius"],
+            "approvals": ["chat:approval"],
+            "evidence_root": "/tmp/evidence",
+            "result": "fedor_canary_pending",
+        },
+        policy_path=POLICY_PATH,
+    )
+
+    assert result.allowed is True
+    assert result.reason == "staged_rollout_recorded"
+
+
+def test_native_gate_allows_fedor_then_93_as_staged_prefix():
+    result = evaluate_fleet_gate(
+        {
+            "action_class": "scheduled_job_creation_or_update",
+            "affected_nodes": ["fedor", "93"],
+            "rollout_order": ["fedor", "93", "archivarius"],
+            "approvals": ["chat:approval"],
+            "evidence_root": "/tmp/evidence",
+            "result": "mac93_canary_pending",
+        },
+        policy_path=POLICY_PATH,
+    )
+
+    assert result.allowed is True
+    assert result.reason == "staged_rollout_recorded"
+
+
+def test_native_gate_blocks_non_prefix_node_selection():
+    result = evaluate_fleet_gate(
+        {
+            "action_class": "scheduled_job_creation_or_update",
+            "affected_nodes": ["93"],
+            "rollout_order": ["fedor", "93", "archivarius"],
+            "approvals": ["chat:approval"],
+            "evidence_root": "/tmp/evidence",
+            "result": "invalid_skip_fedor",
+        },
+        policy_path=POLICY_PATH,
+    )
+
+    assert result.allowed is False
+    assert "staged prefix" in result.reason
+
 def test_native_gate_blocks_archivarius_first_without_exception():
     result = evaluate_fleet_gate(
         {

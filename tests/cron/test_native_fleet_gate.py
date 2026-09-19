@@ -23,6 +23,15 @@ FLEET_DECISION = {
     "result": "preflight_passed",
 }
 
+FEDOR_CANARY_DECISION = {
+    "action_class": "scheduled_job_creation_or_update",
+    "affected_nodes": ["fedor"],
+    "rollout_order": ["fedor", "93", "archivarius"],
+    "approvals": ["telegram:vadim:2026-09-19:fedor-canary"],
+    "evidence_root": "/home/wwolfy/.hermes/fleet/releases/native-fleet-policy-gate-fedor-canary",
+    "result": "fedor_canary_pending",
+}
+
 
 def test_local_cron_job_does_not_require_fleet_decision(temp_cron_store):
     job = create_job(
@@ -56,6 +65,19 @@ def test_fleet_affecting_cron_job_persists_native_decision(temp_cron_store):
     )
 
     assert job["fleet_decision"]["rollout_order"] == ["fedor", "93", "archivarius"]
+    assert load_jobs()[0]["fleet_decision"] == job["fleet_decision"]
+
+
+def test_fleet_affecting_cron_job_accepts_fedor_only_canary_decision(temp_cron_store):
+    job = create_job(
+        prompt="Run Fedor-only fleet gate canary; do not touch 93 or Archivarius",
+        schedule="in 1m",
+        name="fleet gate fedor canary",
+        deliver="local",
+        fleet_decision=FEDOR_CANARY_DECISION,
+    )
+
+    assert job["fleet_decision"]["affected_nodes"] == ["fedor"]
     assert load_jobs()[0]["fleet_decision"] == job["fleet_decision"]
 
 
