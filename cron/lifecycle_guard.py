@@ -279,10 +279,11 @@ _CONTROL_CHARS = frozenset(";&|()")
 _CLOUD_PLACEHOLDER_MARKERS = frozenset({"Mobile Documents", "CloudStorage"})
 
 # Executables whose arguments are DATA (search patterns, SQL, log filters) and cannot execute their
-# argument text. Deliberately conservative: no `awk` (system()), no `sed` (`s///e`), no
-# `echo`/`printf` (routinely piped into a shell), no `mysql` (`\\!` and `system` escapes).
+# argument text. Deliberately conservative: no `awk` (system()), no `sed` (`s///e`),
+# no `mysql` (`\\!` and `system` escapes). `echo`/`printf` are masked only when their
+# output is not piped into a shell/interpreter.
 _DATA_SINK_EXECUTABLES = frozenset(
-    {"grep", "egrep", "fgrep", "rg", "ag", "ack", "journalctl", "sqlite3", "psql"}
+    {"grep", "egrep", "fgrep", "rg", "ag", "ack", "journalctl", "sqlite3", "psql", "printf", "echo"}
 )
 # Argument shapes that smuggle execution back INTO a data sink (command/process substitution, psql
 # `\!`). Any hit disables masking for the whole segment — fail closed to the plain regex verdict.
@@ -419,6 +420,12 @@ def contains_gateway_lifecycle_command(text: str) -> bool:
 
     text = strip_inert_heredoc_bodies(text)
     normalized = _SHELL_LINE_CONTINUATION.sub(" ", text)
+    # Data-sink arguments are content, not commands. This public helper is
+    # called directly by approval/code-execution guards, so the exemption must
+    # live here rather than only in the outer referenced-script scanner. The
+    # masker fails closed: if the line pipes to a shell/interpreter, contains
+    # command substitution, or cannot be tokenized, it returns the original text.
+    normalized = _mask_data_sink_arguments(normalized)
     if _GATEWAY_LIFECYCLE_PATTERN.search(normalized):
         return True
     # Profile-flag form: blocked only when the named profile IS the one running the guard.
@@ -733,7 +740,7 @@ def _mask_data_sink_arguments(text: str) -> str:
 
         rebuilt: list[str] = []
         for segment in _split_segments(tokens, keep_controls=True):
-            index = _command_token_index(segment)
+            index = _executed_command_index(segment)
             if index is not None and Path(segment[index]).name in _DATA_SINK_EXECUTABLES:
                 arguments = segment[index + 1 :]
                 if not any(
