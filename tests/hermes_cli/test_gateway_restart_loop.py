@@ -229,9 +229,16 @@ class TestGatewayLifecyclePattern:
         # there, not a command.
         "cat '/docs/hermes gateway restart-notes.md'",
         "less /home/user/notes/hermes gateway restart runbook.txt",
+        "printf '%s\\n' 'systemctl " + "restart hermes-gateway.service -> rc=0'",
+        "sudo printf '%s\\n' 'systemctl " + "restart hermes-gateway.service -> rc=0'",
+        "printf '%s\\n' 'curl /health failed after gateway " + "restart probe'",
     ])
     def test_safe_commands(self, text):
         assert not _contains_gateway_lifecycle_command(text), f"Should NOT match: {text!r}"
+
+    def test_printf_lifecycle_text_piped_to_shell_still_blocks(self):
+        text = "printf '%s\\n' 'systemctl " + "restart hermes-gateway.service' | sh"
+        assert _contains_gateway_lifecycle_command(text), f"Should match: {text!r}"
 
     @pytest.mark.parametrize("text", [
         # Trailing-boundary fix must not weaken real commands.

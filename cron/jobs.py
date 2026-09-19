@@ -1687,6 +1687,47 @@ _UPDATE_FIELD_NORMALIZERS: Dict[str, Callable[[Any], Any]] = {
 }
 
 
+def _compute_provider_model_snapshots(
+    *, provider: Any, model: Any, base_url: Any, no_agent: Any,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Snapshot unpinned provider/model resolution: the scheduler runs the job on this snapshot after
+    a later global switch instead of silently changing spend. Pinned axes and no-agent jobs carry no
+    snapshot."""
+    normalized_provider = _normalize_job_optional_text(provider)
+    normalized_model = _normalize_job_optional_text(model)
+    normalized_base_url = _normalize_base_url(base_url)
+    if bool(no_agent):
+        return None, None
+
+    provider_snapshot: Optional[str] = None
+    model_snapshot: Optional[str] = None
+    if normalized_provider is None:
+        with contextlib.suppress(Exception):
+            from hermes_cli.runtime_provider import resolve_runtime_provider
+
+            runtime_kwargs = {"requested": None}
+            if normalized_base_url:
+                runtime_kwargs["explicit_base_url"] = normalized_base_url
+            snap = resolve_runtime_provider(**runtime_kwargs)
+            provider_snapshot = str(snap.get("provider") or "").strip().lower() or None
+    if normalized_model is None:
+        with contextlib.suppress(Exception):
+            model_snapshot = _resolve_default_model_snapshot() or None
+    return provider_snapshot, model_snapshot
+
+
+def _normalized_inference_axes(
+    job: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[str], Optional[str], bool]:
+    """Return the stored inference-routing fields in their semantic form."""
+    return (
+        _normalize_job_optional_text(job.get("provider")),
+        _normalize_job_optional_text(job.get("model")),
+        _normalize_base_url(job.get("base_url")),
+        bool(job.get("no_agent")),
+    )
+
+
 def _validate_job_mode_invariants(
     monitor_script: Optional[str],
     monitor_url: Optional[str],

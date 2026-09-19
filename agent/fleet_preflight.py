@@ -21,9 +21,27 @@ from typing import Any, Mapping
 FLEET_CONTEXT_MARKER_ENV = "HERMES_FLEET_CHANGE_CONTEXT"
 PREFLIGHT_MARKER_ENV = "HERMES_FLEET_PREFLIGHT_MARKER"
 CRON_FLEET_APPROVAL_ENV = "HERMES_CRON_FLEET_APPROVAL"
+FLEET_APPROVAL_ENV = "HERMES_FLEET_APPROVAL"
 
 _MUTATION_FILE_TOOLS = {"write_file", "patch"}
-_KNOWLEDGE_VAULT_DIR = (Path.home() / ".hermes" / "knowledge").resolve()
+def _knowledge_vault_dirs() -> tuple[Path, ...]:
+    candidates = [Path.home() / ".hermes" / "knowledge"]
+    hermes_home = os.environ.get("HERMES_HOME")
+    if hermes_home:
+        candidates.append(Path(hermes_home) / "knowledge")
+    candidates.append(Path("/home/wwolfy/.hermes/knowledge"))
+    resolved: list[Path] = []
+    for candidate in candidates:
+        try:
+            path = candidate.expanduser().resolve()
+        except Exception:
+            continue
+        if path not in resolved:
+            resolved.append(path)
+    return tuple(resolved)
+
+
+_KNOWLEDGE_VAULT_DIRS = _knowledge_vault_dirs()
 _MUTATION_SERVICE_TOOLS = {"ha_call_service"}
 _READ_ONLY_TOOLS = {
     "read_file",
@@ -86,7 +104,7 @@ def _path_is_inside(path: Path, parent: Path) -> bool:
 def _file_args_target_only_knowledge_vault(args: Mapping[str, Any]) -> bool:
     candidates = [str(args.get(k) or "").strip() for k in ("path", "file_path")]
     targets = [Path(value).expanduser() for value in candidates if value]
-    return bool(targets) and all(_path_is_inside(target, _KNOWLEDGE_VAULT_DIR) for target in targets)
+    return bool(targets) and all(any(_path_is_inside(target, vault_dir) for vault_dir in _KNOWLEDGE_VAULT_DIRS) for target in targets)
 
 
 def _shell_words(command: str) -> list[str]:
@@ -361,14 +379,21 @@ def _parse_iso_datetime(value: str | None) -> datetime | None:
 
 
 def _cron_approval_from_context() -> Mapping[str, Any] | None:
+    data = _approval_from_context_var(FLEET_APPROVAL_ENV)
+    if data:
+        return data
+    return _approval_from_context_var(CRON_FLEET_APPROVAL_ENV)
+
+
+def _approval_from_context_var(env_name: str) -> Mapping[str, Any] | None:
     try:
         from gateway.session_context import get_session_env
 
-        raw = get_session_env(CRON_FLEET_APPROVAL_ENV, "")
+        raw = get_session_env(env_name, "")
     except Exception:
         raw = ""
     if not raw:
-        raw = os.environ.get(CRON_FLEET_APPROVAL_ENV, "")
+        raw = os.environ.get(env_name, "")
     if not raw:
         return None
     try:
@@ -384,7 +409,27 @@ def _cron_approval_valid(data: Mapping[str, Any] | None, tool_name: str, args: M
     expires_at = _parse_iso_datetime(str(data.get("expires_at") or ""))
     if not expires_at or expires_at <= datetime.now(timezone.utc):
         return False
-    if str(data.get("job_id") or "") != str(os.environ.get("HERMES_CRON_JOB_ID") or ""):
+    if data.get("job_id"):
+        try:
+            from gateway.session_context import get_session_env
+
+            current_job_id = get_session_env("HERMES_CRON_JOB_ID", "")
+        except Exception:
+            current_job_id = ""
+        if not current_job_id:
+            current_job_id = os.environ.get("HERMES_CRON_JOB_ID", "")
+        if str(data.get("job_id") or "") != str(current_job_id or ""):
+            return False
+    elif data.get("session_key"):
+        try:
+            from gateway.session_context import get_session_env
+
+            current_session_key = get_session_env("HERMES_SESSION_KEY", "")
+        except Exception:
+            current_session_key = ""
+        if str(data.get("session_key") or "") != str(current_session_key or ""):
+            return False
+    else:
         return False
     if tool_name != "terminal":
         return False

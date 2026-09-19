@@ -341,6 +341,34 @@ def test_scoped_cron_approval_allows_only_matching_pull(monkeypatch):
     assert denied_action.blocked is True
 
 
+
+def test_scoped_gateway_approval_allows_matching_session_action(monkeypatch):
+    approval = {
+        "session_key": "telegram:dm:vadim",
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "allowed_actions": ["git_pull_ff_only"],
+        "scopes": {"hosts": ["fedor"], "repos": ["/srv/hermes"]},
+        "approval": "operator approved this scoped gateway action",
+        "evidence_target": "/home/wwolfy/.hermes/fleet/releases/gateway/evidence.md",
+    }
+    monkeypatch.delenv("HERMES_FLEET_PREFLIGHT_MARKER", raising=False)
+    monkeypatch.delenv("HERMES_CRON_JOB_ID", raising=False)
+    monkeypatch.delenv("HERMES_CRON_FLEET_APPROVAL", raising=False)
+    monkeypatch.delenv("HERMES_FLEET_APPROVAL", raising=False)
+    from gateway.session_context import clear_session_vars, set_session_vars
+
+    tokens = set_session_vars(platform="telegram", session_key="telegram:dm:vadim", fleet_approval=json.dumps(approval), cron_session="")
+    try:
+        allowed = fleet_preflight.check_fleet_preflight("terminal", {"command": "ssh fedor cd /srv/hermes && git pull --ff-only"}, user_task="approved Hermes fleet maintenance")
+        denied_host = fleet_preflight.check_fleet_preflight("terminal", {"command": "ssh mac93 cd /srv/hermes && git pull --ff-only"}, user_task="approved Hermes fleet maintenance")
+        denied_action = fleet_preflight.check_fleet_preflight("terminal", {"command": "ssh fedor cd /srv/hermes && systemctl --user " + "restart hermes-gateway.service"}, user_task="approved Hermes fleet maintenance")
+    finally:
+        clear_session_vars(tokens)
+
+    assert allowed.blocked is False
+    assert denied_host.blocked is True
+    assert denied_action.blocked is True
+
 def test_expired_cron_approval_blocks_mutation(monkeypatch):
     approval = {
         "job_id": "af5d2a9913d1",
